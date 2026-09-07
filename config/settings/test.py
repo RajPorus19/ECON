@@ -25,4 +25,7 @@ ECON = {
     "EXECUTION_MODE": "local",
     "HOST_AGENT_URL": "http://127.0.0.1:8765",
     "HOST_AGENT_TOKEN": "test-token",
+    "CACHE_BACKEND": "memory",
+    "ALIAS_CONFIRMATIONS": 3,
+    "ESTIMATED_BASELINE_TOKENS": 1200,
 }

@@ -20,6 +20,7 @@ dependencies = [
     "uvicorn>=0.34",
     "python-dotenv>=1.1",
     "django-cors-headers>=4.7",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,7 @@ dev = [
     "django-stubs>=5.2",
     "djangorestframework-stubs>=3.16",
     "types-redis>=4.6",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]
@@ -38,7 +40,10 @@ econom = "econom.cli:main"
 econom-host-agent = "host_agent.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["config*", "apps*", "core*", "econom*", "host_agent*"]
+include = ["config*", "apps*", "core*", "econom*", "host_agent*", "plugins*"]
+
+[tool.setuptools.package-data]
+plugins = ["*/plugin.yaml"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"

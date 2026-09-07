@@ -29,6 +29,13 @@ class RequestLog(models.Model):
     )
     duration_ms = models.PositiveIntegerField(default=0)
     debug = models.JSONField(default=dict, blank=True)
+    proposal = models.JSONField(default=dict, blank=True)
+    cache_layer = models.CharField(max_length=8, blank=True)
+    match_method = models.CharField(max_length=32, blank=True)
+    prompt_tokens = models.PositiveIntegerField(default=0)
+    completion_tokens = models.PositiveIntegerField(default=0)
+    estimated_tokens_without_econ = models.PositiveIntegerField(default=0)
+    tokens_saved = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ["-created_at"]

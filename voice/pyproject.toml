@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "econom-voice"
+version = "0.1.0"
+description = "ECON voice client: VAD + STT + POST /api/v1/execute"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+voice = [
+    "faster-whisper>=1.1",
+    "silero-vad>=5.1",
+    "sounddevice>=0.5",
+    "soundfile>=0.13",
+    "numpy>=2.0",
+]
+
+[project.scripts]
+econom-voice = "econom_voice.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["econom_voice*"]

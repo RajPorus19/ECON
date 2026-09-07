@@ -1,6 +1,6 @@
 from django.db import models
 
-from apps.knowledge.models import Entity, Intent
+from apps.knowledge.models import Entity, Intent, Provider
 from apps.mixins import TimeStampedModel
 
 
@@ -65,6 +65,9 @@ class FlowNode(models.Model):
     )
     entity = models.ForeignKey(
         Entity, on_delete=models.SET_NULL, null=True, blank=True, related_name="flow_nodes"
+    )
+    provider = models.ForeignKey(
+        Provider, on_delete=models.SET_NULL, null=True, blank=True, related_name="flow_nodes"
     )
     position = models.PositiveIntegerField(default=0)
     config = models.JSONField(default=dict, blank=True)

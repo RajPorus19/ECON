@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Alias, Entity, Intent, IntentAlias, Provider
+from .models import Alias, AliasCandidate, Entity, Intent, IntentAlias, Provider
 
 
 class AliasInline(admin.TabularInline):
@@ -10,7 +10,7 @@ class AliasInline(admin.TabularInline):
 
 @admin.register(Entity)
 class EntityAdmin(admin.ModelAdmin):
-    list_display = ("name", "type", "confidence", "usage_count", "last_used_at")
+    list_display = ("name", "type", "confidence", "usage_count", "success_count", "last_used_at")
     list_filter = ("type",)
     search_fields = ("name", "normalized_name")
     inlines = [AliasInline]
@@ -29,7 +29,7 @@ class IntentAliasInline(admin.TabularInline):
 
 @admin.register(Intent)
 class IntentAdmin(admin.ModelAdmin):
-    list_display = ("name", "confidence", "usage_count")
+    list_display = ("name", "confidence", "usage_count", "success_count", "last_used_at")
     search_fields = ("name",)
     inlines = [IntentAliasInline]
 
@@ -42,5 +42,10 @@ class IntentAliasAdmin(admin.ModelAdmin):
 
 @admin.register(Provider)
 class ProviderAdmin(admin.ModelAdmin):
-    list_display = ("name", "type")
+    list_display = ("name", "type", "plugin")
     search_fields = ("name",)
+
+
+@admin.register(AliasCandidate)
+class AliasCandidateAdmin(admin.ModelAdmin):
+    list_display = ("normalized_phrase", "entity", "confirmations", "last_seen_at")

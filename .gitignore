@@ -38,5 +38,10 @@ htmlcov/
 .DS_Store
 *.swp
 
+# Frontend
+web/node_modules/
+web/.output/
+web/dist/
+
 # Docker
 postgres-data/

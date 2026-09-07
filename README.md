@@ -2,20 +2,20 @@
 
 **ECON** (Execution & Cognitive Optimization Network) is a local automation runtime. It turns natural-language commands into deterministic, reusable flows so that Hermes (or another local LLM) is a teacher and fallback — not the hot path.
 
-This repository is the Phase 1 foundation: Django + DRF, a Django-independent core, PostgreSQL, Redis, a host command agent, and an Ollama/Hermes adapter. The web UI (TanStack Start), voice client, and plugin marketplace come later. Until then, Django Admin is the knowledge editor.
-
 Product spec: [SPECS.md](SPECS.md). Stack: [STACK.md](STACK.md).
+
+Matching uses Redis cache layers L1–L4, then the database, then Hermes. Learning (confidence, aliases, metrics) runs on Celery, not on the voice/execute hot path. The TanStack Start UI lives in `web/`. Voice capture is a separate `econom-voice` client.
 
 ## Architecture
 
 ```
-Voice / CLI / HTTP
+Voice / CLI / Web UI
         │
         ▼
-   ECON API (Django/DRF)
+   ECON API (Django/DRF + SSE)
         │
         ▼
-     ECON Core          ← matcher, security, compiler
+     ECON Core          ← cache L1–L4, matcher, security, compiler
         │
    ┌────┴─────┐
    ▼          ▼
@@ -29,11 +29,12 @@ Voice / CLI / HTTP
                     host agent (when API is in Docker)
 ```
 
-Hermes never calls the shell. Proposed actions go through a security policy, then an executor that only accepts an argv list (`shell=False`).
+Hermes never calls the shell. Proposed actions go through a security policy (`AUTO` / `CONFIRM` / `DENY`), then an executor that only accepts an argv list (`shell=False`). Secrets stay in environment variables — never in flows, logs, or LLM prompts. Token savings are **estimated**.
 
 ## Requirements
 
 - Python 3.12+
+- Node.js 22+ and [pnpm](https://pnpm.io) (web UI)
 - Docker (for Postgres/Redis, and optionally the API)
 - [Ollama](https://ollama.com) on the **host**, with a Hermes (or compatible) model already pulled
 - macOS or Linux
@@ -54,13 +55,15 @@ Start Postgres and Redis:
 docker compose up postgres redis
 ```
 
-Apply migrations and seed default intents:
+Apply migrations and seed default intents plus Steam/Jellyfin plugin manifests:
 
 ```bash
 python manage.py migrate
 python manage.py seed_defaults
 python manage.py createsuperuser   # optional, for Django Admin
 ```
+
+YAML defaults live in `econom.yaml`. Environment variables always win.
 
 ## Run modes
 
@@ -77,14 +80,34 @@ ECON_LLM_MODEL=hermes
 econom start
 # Django Admin: http://127.0.0.1:8000/admin/
 # Health:       http://127.0.0.1:8000/health
+# API:          POST /api/v1/execute
 ```
 
 ```bash
 econom run "echo hello" --debug
-# or
-curl -s -X POST http://127.0.0.1:8000/api/v1/execute?debug=true \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"echo hello"}'
+econom test "Lance Firefox"
+econom flows list
+econom entities list
+econom graph Firefox
+econom learn
+```
+
+### Frontend (TanStack Start)
+
+```bash
+cd web
+pnpm install
+pnpm dev          # http://localhost:3000  (VITE_ECON_API_URL defaults to http://127.0.0.1:8000)
+```
+
+Dashboard, Requests, Knowledge, Graph, Flow editor, Hermes activity, and Optimizations. Live events: `GET /api/v1/events`.
+
+### Voice client (not inside Django)
+
+```bash
+uv pip install -e "./voice[voice]"
+econom-voice --text "Lance Firefox"
+econom-voice                         # VAD → STT → POST /api/v1/execute
 ```
 
 ### Dockerized API + host commands
@@ -108,7 +131,7 @@ econom host-agent
 docker compose up --build
 ```
 
-`econom doctor` from a shell on the host still talks to local ports (8000, 5432, 11434, 8765).
+`econom doctor` from a shell on the host still talks to local ports (8000, 5432, 11434, 8765). Run the frontend and voice client on the host against `http://127.0.0.1:8000`.
 
 ## `econom doctor`
 
@@ -116,7 +139,7 @@ docker compose up --build
 econom doctor
 ```
 
-Checks PostgreSQL, Redis, Ollama/Hermes (`GET /api/tags`), and — when `ECON_EXECUTION_MODE=host_agent` — the host agent health endpoint.
+Checks PostgreSQL, Redis, Ollama/Hermes (`GET /api/tags`), STT if present, the shell executor, and the host agent.
 
 ## Environment
 
@@ -128,10 +151,13 @@ Checks PostgreSQL, Redis, Ollama/Hermes (`GET /api/tags`), and — when `ECON_EX
 | `ECON_LLM_BASE_URL` | `http://127.0.0.1:11434` | Host Ollama. In Compose: `http://host.docker.internal:11434` |
 | `ECON_LLM_MODEL` | `hermes` | Model tag already pulled in Ollama |
 | `ECON_CONFIDENCE_THRESHOLD` | `0.90` | Below this, ECON calls Hermes |
+| `ECON_ALIAS_CONFIRMATIONS` | `3` | Confirmations before automatic aliases |
 | `ECON_EXECUTION_MODE` | `local` | `local` or `host_agent` |
 | `ECON_HOST_AGENT_URL` | `http://127.0.0.1:8765` | In Compose: `http://host.docker.internal:8765` |
 | `ECON_HOST_AGENT_TOKEN` | (required for the agent) | Shared bearer token |
-| `ECON_API_URL` | `http://127.0.0.1:8000` | Used by `econom run` |
+| `ECON_API_URL` | `http://127.0.0.1:8000` | Used by `econom run` and `econom-voice` |
+| `ECON_ESTIMATED_BASELINE_TOKENS` | `1200` | Estimated Hermes cost when ECON skips the LLM |
+| `JELLYFIN_URL` / `JELLYFIN_API_KEY` | | Jellyfin plugin secrets (env only) |
 
 ## Project layout
 
@@ -140,8 +166,12 @@ config/          Django project (split settings, ASGI, Celery)
 apps/            Django apps: users, knowledge, flows, execution, llm, requests, plugins, analytics
 core/            Django-free engine (normalize, match, security, executors, LLM protocol)
 host_agent/      Host command daemon
-econom/          CLI (`econom start|run|doctor|host-agent`)
+econom/          CLI (`econom start|run|doctor|host-agent|flows|entities|graph|learn|test`)
+plugins/         Steam + Jellyfin example plugins
+web/             TanStack Start UI
+voice/           econom-voice client
 tests/
+econom.yaml      Defaults (env overrides)
 ```
 
 ## Tests and lint
@@ -150,15 +180,14 @@ tests/
 pytest
 ruff check .
 ruff format .
+cd web && pnpm test && pnpm build
 ```
-
-## What this phase does not include
-
-TanStack UI, voice/STT, embeddings, Steam/Jellyfin plugins, Redis phrase-cache layers, and Celery learning jobs. Those are later phases in the spec. Django Admin already CRUD-ed entities, intents, flows, actions, executions, and Hermes call logs.
 
 ## Security
 
 - Executors pass an argv list to `subprocess.run(..., shell=False)`.
 - Destructive patterns (`rm -rf /`, `mkfs`, `dd`, …) are denied.
 - Filesystem and shutdown-style actions return `confirm_required` unless `"confirm": true`.
+- Learned flows are versioned; definitions are never silently rewritten.
+- Plugin credentials are env refs, never stored on flow nodes.
 - The host agent requires a bearer token and binds loopback by default.

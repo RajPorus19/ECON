@@ -17,6 +17,8 @@ COPY core /app/core
 COPY econom /app/econom
 COPY host_agent /app/host_agent
 COPY manage.py /app/manage.py
+COPY plugins /app/plugins
+COPY econom.yaml /app/econom.yaml
 COPY docker /app/docker
 
 RUN pip install --no-cache-dir . \

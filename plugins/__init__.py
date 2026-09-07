@@ -1,0 +1,1 @@
+"""Plugin packages (Steam, Jellyfin, …)."""

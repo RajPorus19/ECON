@@ -1,4 +1,4 @@
-from core.matching import exact_or_alias_match, longest_prefix_match
+from core.matching import exact_or_alias_match, fuzzy_match, longest_prefix_match
 
 
 def test_longest_prefix_prefers_longer_phrase() -> None:
@@ -19,3 +19,10 @@ def test_entity_exact_match() -> None:
     )
     assert hit is not None
     assert hit.name == "Firefox"
+
+
+def test_fuzzy_close_token() -> None:
+    hit = fuzzy_match("firef0x", [("firefox", "Firefox", 1.0)], threshold=0.7)
+    assert hit is not None
+    assert hit.name == "Firefox"
+    assert hit.method == "fuzzy"

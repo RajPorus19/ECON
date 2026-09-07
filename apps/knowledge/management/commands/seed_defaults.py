@@ -8,6 +8,7 @@ LAUNCH_PHRASES = ("lance", "lancer", "start", "run", "open", "ouvre", "demarre",
 DEFAULT_INTENTS = (
     ("launch_program", "Launch an application or game", LAUNCH_PHRASES),
     ("shell_execute", "Run a shell command", ("execute", "exec", "shell")),
+    ("play_media", "Play media on a provider", ("play", "mets", "watch")),
 )
 
 
@@ -51,4 +52,8 @@ class Command(BaseCommand):
                 },
             )
             self.stdout.write("Created action shell.execute v1")
+        from apps.plugins.registry import discover_and_sync
+
+        for plugin in discover_and_sync():
+            self.stdout.write(f"Plugin {plugin.name} {plugin.version}")
         self.stdout.write(self.style.SUCCESS("Seed complete."))

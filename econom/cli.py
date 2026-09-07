@@ -1,4 +1,4 @@
-"""econom CLI: start, run, doctor."""
+"""econom CLI: start, run, doctor, flows, entities, graph, learn, test, host-agent."""
 
 from __future__ import annotations
 
@@ -17,6 +17,13 @@ def _load_env() -> None:
     load_dotenv(ROOT / ".env")
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.development")
     sys.path.insert(0, str(ROOT))
+
+
+def _setup_django() -> None:
+    _load_env()
+    import django
+
+    django.setup()
 
 
 def cmd_start(_args: argparse.Namespace) -> int:
@@ -47,16 +54,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if response.is_success else 1
 
 
+def cmd_test(args: argparse.Namespace) -> int:
+    args.debug = True
+    return cmd_run(args)
+
+
 def _check(name: str, ok: bool, detail: str) -> None:
     mark = "ok" if ok else "FAIL"
     print(f"  [{mark}] {name}: {detail}")
 
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
-    _load_env()
-    import django
-
-    django.setup()
+    _setup_django()
     from django.conf import settings
     from django.db import connection
 
@@ -95,20 +104,36 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         f"{settings.ECON['LLM_BASE_URL']} model={settings.ECON['LLM_MODEL']}",
     )
 
-    mode = settings.ECON.get("EXECUTION_MODE", "local")
-    if mode == "host_agent":
-        from core.execution.host_agent import HostAgentExecutor
+    from core.stt import load_stt
 
-        agent = HostAgentExecutor(
-            str(settings.ECON["HOST_AGENT_URL"]),
-            str(settings.ECON["HOST_AGENT_TOKEN"]),
-        )
-        agent_ok = agent.ping()
+    stt = load_stt()
+    stt_ok = stt.ping()
+    if stt_ok:
+        _check("STT", True, type(stt).__name__)
+    else:
+        _check("STT", True, "not installed (optional)")
+
+    from core.execution import ping_shell_executor
+
+    shell_ok, shell_detail = ping_shell_executor()
+    if not shell_ok:
+        failed += 1
+    _check("Shell executor", shell_ok, shell_detail)
+
+    mode = settings.ECON.get("EXECUTION_MODE", "local")
+    from core.execution.host_agent import HostAgentExecutor
+
+    agent = HostAgentExecutor(
+        str(settings.ECON["HOST_AGENT_URL"]),
+        str(settings.ECON["HOST_AGENT_TOKEN"]),
+    )
+    agent_ok = agent.ping()
+    if mode == "host_agent":
         if not agent_ok:
             failed += 1
         _check("Host agent", agent_ok, str(settings.ECON["HOST_AGENT_URL"]))
     else:
-        _check("Executor", True, "local subprocess")
+        _check("Host agent", True, f"optional ({'up' if agent_ok else 'down'})")
 
     print()
     if failed:
@@ -126,6 +151,60 @@ def cmd_host_agent(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_flows_list(_args: argparse.Namespace) -> int:
+    _setup_django()
+    from apps.flows.models import Flow
+
+    for flow in Flow.objects.all().order_by("name", "-version"):
+        flag = "on" if flow.enabled else "off"
+        print(
+            f"{flow.pk}\t{flow.name}\tv{flow.version}\t{flag}\t"
+            f"conf={flow.confidence:.2f}\tuse={flow.usage_count}"
+        )
+    return 0
+
+
+def cmd_entities_list(_args: argparse.Namespace) -> int:
+    _setup_django()
+    from apps.knowledge.models import Entity
+
+    for entity in Entity.objects.all().order_by("name"):
+        print(f"{entity.pk}\t{entity.name}\t{entity.type}\tconf={entity.confidence:.2f}")
+    return 0
+
+
+def cmd_graph(args: argparse.Namespace) -> int:
+    _setup_django()
+    from apps.knowledge.models import Entity
+
+    qs = Entity.objects.all()
+    if args.query:
+        qs = qs.filter(name__icontains=args.query)
+    for entity in qs:
+        aliases = ", ".join(entity.aliases.values_list("alias", flat=True)) or "-"
+        print(f"{entity.name} ({entity.type})")
+        print(f"  confidence={entity.confidence:.2f} usage={entity.usage_count}")
+        print(f"  aliases: {aliases}")
+        for node in entity.flow_nodes.select_related("flow", "action")[:8]:
+            print(
+                f"  flow: {node.flow.name} v{node.flow.version} → {node.action or node.node_type}"
+            )
+        print()
+    return 0
+
+
+def cmd_learn(_args: argparse.Namespace) -> int:
+    _setup_django()
+    from apps.analytics.tasks import recompute_daily_metrics
+    from apps.plugins.registry import discover_and_sync
+
+    plugins = discover_and_sync()
+    recompute_daily_metrics.delay()
+    print(f"Discovered plugins: {', '.join(p.name for p in plugins) or '(none)'}")
+    print("Queued daily metric recompute.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="econom", description="ECON local automation runtime")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -139,11 +218,33 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--confirm", action="store_true")
     run.set_defaults(func=cmd_run)
 
-    doctor = sub.add_parser("doctor", help="Check Postgres, Redis, Hermes, and the host agent")
+    test = sub.add_parser("test", help="Execute with debug=true")
+    test.add_argument("text")
+    test.add_argument("--confirm", action="store_true")
+    test.set_defaults(func=cmd_test)
+
+    doctor = sub.add_parser("doctor", help="Check Postgres, Redis, Hermes, STT, host agent, shell")
     doctor.set_defaults(func=cmd_doctor)
 
     agent = sub.add_parser("host-agent", help="Run the host command daemon")
     agent.set_defaults(func=cmd_host_agent)
+
+    flows = sub.add_parser("flows", help="Flow commands")
+    flows_sub = flows.add_subparsers(dest="flows_cmd", required=True)
+    flows_list = flows_sub.add_parser("list", help="List flows")
+    flows_list.set_defaults(func=cmd_flows_list)
+
+    entities = sub.add_parser("entities", help="Entity commands")
+    entities_sub = entities.add_subparsers(dest="entities_cmd", required=True)
+    entities_list = entities_sub.add_parser("list", help="List entities")
+    entities_list.set_defaults(func=cmd_entities_list)
+
+    graph = sub.add_parser("graph", help="Print entity/flow neighborhood")
+    graph.add_argument("query", nargs="?", default="")
+    graph.set_defaults(func=cmd_graph)
+
+    learn = sub.add_parser("learn", help="Discover plugins and recompute metrics")
+    learn.set_defaults(func=cmd_learn)
 
     return parser
 

@@ -25,6 +25,8 @@ class Entity(TimeStampedModel):
     metadata = models.JSONField(default=dict, blank=True)
     confidence = models.FloatField(default=0.5)
     usage_count = models.PositiveIntegerField(default=0)
+    success_count = models.PositiveIntegerField(default=0)
+    failure_count = models.PositiveIntegerField(default=0)
     last_used_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -43,6 +45,7 @@ class Alias(models.Model):
     normalized_alias = models.CharField(max_length=255, db_index=True)
     confidence = models.FloatField(default=0.5)
     usage_count = models.PositiveIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -63,6 +66,9 @@ class Intent(TimeStampedModel):
     description = models.TextField(blank=True)
     confidence = models.FloatField(default=1.0)
     usage_count = models.PositiveIntegerField(default=0)
+    success_count = models.PositiveIntegerField(default=0)
+    failure_count = models.PositiveIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return self.name
@@ -73,6 +79,7 @@ class IntentAlias(models.Model):
     phrase = models.CharField(max_length=255)
     normalized_phrase = models.CharField(max_length=255, db_index=True)
     confidence = models.FloatField(default=1.0)
+    usage_count = models.PositiveIntegerField(default=0)
 
     class Meta:
         verbose_name_plural = "intent aliases"
@@ -89,6 +96,28 @@ class Provider(TimeStampedModel):
     type = models.CharField(max_length=64)
     config = models.JSONField(default=dict, blank=True)
     capabilities = models.JSONField(default=list, blank=True)
+    plugin = models.CharField(max_length=128, blank=True)
 
     def __str__(self) -> str:
         return self.name
+
+
+class AliasCandidate(models.Model):
+    """Repeated ambiguous mappings. Promoted to Alias only after N confirmations."""
+
+    normalized_phrase = models.CharField(max_length=255)
+    entity = models.ForeignKey(Entity, on_delete=models.CASCADE, related_name="alias_candidates")
+    confirmations = models.PositiveIntegerField(default=0)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["normalized_phrase", "entity"],
+                name="uniq_alias_candidate",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.normalized_phrase} ? {self.entity} ({self.confirmations})"

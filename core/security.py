@@ -36,6 +36,16 @@ _DENY_PATTERNS = (
 
 
 @dataclass(frozen=True)
+class SecurityPolicy:
+    launch: Decision = Decision.AUTO
+    http: Decision = Decision.AUTO
+    filesystem: Decision = Decision.CONFIRM
+    process_kill: Decision = Decision.CONFIRM
+    shutdown: Decision = Decision.CONFIRM
+    destructive: Decision = Decision.DENY
+
+
+@dataclass(frozen=True)
 class SecurityVerdict:
     decision: Decision
     reason: str
@@ -65,9 +75,26 @@ def _joined(argv: list[str]) -> str:
     return " ".join(argv)
 
 
+def _decision_for_level(level: SecurityLevel, policy: SecurityPolicy) -> Decision:
+    if level is SecurityLevel.DESTRUCTIVE:
+        return policy.destructive
+    if level is SecurityLevel.PROCESS_KILL:
+        return policy.process_kill
+    if level is SecurityLevel.FILESYSTEM:
+        return policy.filesystem
+    if level is SecurityLevel.HTTP:
+        return policy.http
+    return policy.launch
+
+
 def evaluate(
-    argv: list[str], *, level: SecurityLevel | None = None, confirmed: bool = False
+    argv: list[str],
+    *,
+    level: SecurityLevel | None = None,
+    confirmed: bool = False,
+    policy: SecurityPolicy | None = None,
 ) -> SecurityVerdict:
+    rules = policy or SecurityPolicy()
     if not argv:
         return SecurityVerdict(Decision.DENY, "empty command", SecurityLevel.READ)
 
@@ -79,21 +106,46 @@ def evaluate(
             )
 
     resolved = level or infer_level(argv)
-    if resolved >= SecurityLevel.DESTRUCTIVE:
-        binary = argv[0].rsplit("/", 1)[-1].lower()
-        if binary in {"shutdown", "reboot", "halt", "poweroff"}:
-            if confirmed:
-                return SecurityVerdict(Decision.AUTO, "confirmed system action", resolved)
+    binary = argv[0].rsplit("/", 1)[-1].lower()
+    if binary in {"shutdown", "reboot", "halt", "poweroff"}:
+        decision = rules.shutdown
+        if decision is Decision.DENY:
+            return SecurityVerdict(Decision.DENY, "system action denied", resolved)
+        if decision is Decision.CONFIRM and not confirmed:
             return SecurityVerdict(
                 Decision.CONFIRM, "system action requires confirmation", resolved
             )
-        return SecurityVerdict(Decision.DENY, "destructive action denied", resolved)
+        return SecurityVerdict(Decision.AUTO, "confirmed system action", resolved)
 
-    if resolved >= SecurityLevel.FILESYSTEM:
-        if confirmed:
-            return SecurityVerdict(Decision.AUTO, "confirmed filesystem/process action", resolved)
+    decision = _decision_for_level(resolved, rules)
+    if decision is Decision.DENY:
+        return SecurityVerdict(Decision.DENY, f"{resolved.name.lower()} action denied", resolved)
+    if decision is Decision.CONFIRM and not confirmed:
         return SecurityVerdict(
-            Decision.CONFIRM, "filesystem/process action requires confirmation", resolved
+            Decision.CONFIRM,
+            f"{resolved.name.lower()} action requires confirmation",
+            resolved,
         )
-
+    if decision is Decision.CONFIRM and confirmed:
+        return SecurityVerdict(Decision.AUTO, "confirmed action", resolved)
     return SecurityVerdict(Decision.AUTO, "allowed", resolved)
+
+
+def policy_from_mapping(data: dict[str, str] | None) -> SecurityPolicy:
+    data = data or {}
+
+    def parse(key: str, default: Decision) -> Decision:
+        raw = str(data.get(key, default.value)).lower()
+        try:
+            return Decision(raw)
+        except ValueError:
+            return default
+
+    return SecurityPolicy(
+        launch=parse("launch", Decision.AUTO),
+        http=parse("http", Decision.AUTO),
+        filesystem=parse("filesystem_actions", Decision.CONFIRM),
+        process_kill=parse("process_kill", Decision.CONFIRM),
+        shutdown=parse("shutdown", Decision.CONFIRM),
+        destructive=parse("destructive_actions", Decision.DENY),
+    )

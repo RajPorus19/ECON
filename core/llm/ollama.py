@@ -9,6 +9,7 @@ from __future__ import annotations
 import httpx
 
 from core.llm import HermesProposal, LLMResult, LLMUsage
+from core.secrets import redact, redact_mapping
 
 
 class LLMError(RuntimeError):
@@ -30,6 +31,7 @@ class OllamaProvider:
 
     def generate_structured(self, payload: dict) -> LLMResult:
         schema = HermesProposal.model_json_schema()
+        safe_payload = redact_mapping(payload)
         body = {
             "model": self.model,
             "messages": [
@@ -38,13 +40,16 @@ class OllamaProvider:
                     "content": (
                         "You compile natural-language commands into ECON structured JSON. "
                         "Never invent destructive commands. "
+                        "Never request or echo secrets, API keys, or tokens. "
                         "Prefer argv over a single shell string. "
                         "Reply with JSON only."
                     ),
                 },
                 {
                     "role": "user",
-                    "content": (f"Compile this request into the JSON schema. Context: {payload}"),
+                    "content": (
+                        f"Compile this request into the JSON schema. Context: {safe_payload}"
+                    ),
                 },
             ],
             "stream": False,
@@ -61,7 +66,7 @@ class OllamaProvider:
             raise LLMError(f"Ollama unreachable at {self.base_url}: {exc}") from exc
 
         if response.status_code >= 400:
-            raise LLMError(f"Ollama HTTP {response.status_code}: {response.text[:500]}")
+            raise LLMError(f"Ollama HTTP {response.status_code}: {redact(response.text[:500])}")
 
         data = response.json()
         content = (data.get("message") or {}).get("content") or ""

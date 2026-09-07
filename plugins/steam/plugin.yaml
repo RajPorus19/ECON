@@ -1,0 +1,19 @@
+name: steam
+version: 0.1.0
+
+entity_types:
+  - game
+
+capabilities:
+  - launch
+
+actions:
+  - id: steam.launch
+    executor: shell
+    security_level: 1
+    parameters:
+      app_id:
+        type: string
+    command:
+      - steam
+      - "steam://rungameid/{app_id}"

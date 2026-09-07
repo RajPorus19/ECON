@@ -1,0 +1,20 @@
+econom:
+  llm:
+    provider: ollama
+    model: hermes
+    base_url: http://127.0.0.1:11434
+  matching:
+    confidence_threshold: 0.90
+    alias_confirmations: 3
+    semantic_threshold: 0.82
+  execution:
+    default_timeout: 30
+    mode: local
+    host_agent_url: http://127.0.0.1:8765
+  security:
+    destructive_actions: deny
+    filesystem_actions: confirm
+  tokens:
+    estimated_baseline: 1200
+  cache:
+    ttl_seconds: 86400

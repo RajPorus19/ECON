@@ -42,6 +42,9 @@ class ExecuteView(APIView):
             "llm_used": result.llm_used,
             "message": result.message,
             "argv": result.argv,
+            "cache_layer": result.cache_layer or None,
+            "tokens_saved": result.tokens_saved,
+            "tokens_saved_are_estimated": True,
         }
         if debug:
             payload["debug"] = result.debug

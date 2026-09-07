@@ -23,5 +23,12 @@ def test_shutdown_requires_confirm() -> None:
     assert verdict.decision is Decision.CONFIRM
 
 
+def test_policy_can_deny_filesystem() -> None:
+    from core.security import SecurityPolicy
+
+    verdict = evaluate(["rm", "notes.txt"], policy=SecurityPolicy(filesystem=Decision.DENY))
+    assert verdict.decision is Decision.DENY
+
+
 def test_empty_argv_denied() -> None:
     assert evaluate([]).decision is Decision.DENY

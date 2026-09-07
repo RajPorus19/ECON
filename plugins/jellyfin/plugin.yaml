@@ -1,0 +1,27 @@
+name: jellyfin
+version: 0.1.0
+
+entity_types:
+  - movie
+  - tv_show
+  - music
+
+capabilities:
+  - search
+  - play
+  - pause
+  - stop
+
+actions:
+  - id: jellyfin.search
+    executor: http
+    security_level: 2
+  - id: jellyfin.play
+    executor: http
+    security_level: 2
+  - id: jellyfin.pause
+    executor: http
+    security_level: 2
+  - id: jellyfin.stop
+    executor: http
+    security_level: 2

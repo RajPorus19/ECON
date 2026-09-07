@@ -4,11 +4,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from core.config import env_float, env_int, env_list, env_str
+from core.config import env_list, env_str
+from core.yamlcfg import load_econom_config
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 load_dotenv(BASE_DIR / ".env")
+
+_yaml = load_econom_config(BASE_DIR / "econom.yaml")
 
 SECRET_KEY = env_str("DJANGO_SECRET_KEY", "insecure-dev-key-change-me")
 
@@ -91,6 +94,8 @@ REST_FRAMEWORK = {
     "DEFAULT_PARSER_CLASSES": [
         "rest_framework.parsers.JSONParser",
     ],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    "PAGE_SIZE": 50,
 }
 
 CELERY_BROKER_URL = env_str("CELERY_BROKER_URL", env_str("REDIS_URL", "redis://127.0.0.1:6379/1"))
@@ -98,16 +103,31 @@ CELERY_RESULT_BACKEND = env_str("REDIS_URL", "redis://127.0.0.1:6379/0")
 CELERY_TASK_ALWAYS_EAGER = False
 
 ECON = {
-    "LLM_BASE_URL": env_str("ECON_LLM_BASE_URL", "http://127.0.0.1:11434"),
-    "LLM_MODEL": env_str("ECON_LLM_MODEL", "hermes"),
-    "CONFIDENCE_THRESHOLD": env_float("ECON_CONFIDENCE_THRESHOLD", 0.90),
-    "EXECUTION_TIMEOUT": env_int("ECON_EXECUTION_TIMEOUT", 30),
-    "EXECUTION_MODE": env_str("ECON_EXECUTION_MODE", "local"),
-    "HOST_AGENT_URL": env_str("ECON_HOST_AGENT_URL", "http://127.0.0.1:8765"),
-    "HOST_AGENT_TOKEN": env_str("ECON_HOST_AGENT_TOKEN", ""),
+    "LLM_BASE_URL": _yaml.llm_base_url,
+    "LLM_MODEL": _yaml.llm_model,
+    "LLM_PROVIDER": _yaml.llm_provider,
+    "CONFIDENCE_THRESHOLD": _yaml.confidence_threshold,
+    "ALIAS_CONFIRMATIONS": _yaml.alias_confirmations,
+    "SEMANTIC_THRESHOLD": _yaml.semantic_threshold,
+    "EXECUTION_TIMEOUT": _yaml.execution_timeout,
+    "EXECUTION_MODE": _yaml.execution_mode,
+    "HOST_AGENT_URL": _yaml.host_agent_url,
+    "HOST_AGENT_TOKEN": _yaml.host_agent_token,
+    "DESTRUCTIVE_ACTIONS": _yaml.destructive_actions,
+    "FILESYSTEM_ACTIONS": _yaml.filesystem_actions,
+    "ESTIMATED_BASELINE_TOKENS": _yaml.estimated_baseline_tokens,
+    "CACHE_TTL_SECONDS": _yaml.cache_ttl_seconds,
+    "CACHE_BACKEND": env_str("ECON_CACHE_BACKEND", "redis"),
+    "REDIS_URL": env_str("REDIS_URL", "redis://127.0.0.1:6379/0"),
+    "PLUGIN_ROOT": env_str("ECON_PLUGIN_ROOT", str(BASE_DIR / "plugins")),
 }
 
 CORS_ALLOWED_ORIGINS = env_list(
     "CORS_ALLOWED_ORIGINS",
-    ["http://localhost:3000", "http://127.0.0.1:3000"],
+    [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
 )

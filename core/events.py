@@ -26,10 +26,15 @@ class EventBus:
 
 REQUEST_RECEIVED = "request.received"
 REQUEST_MATCHED = "request.matched"
+CACHE_HIT = "cache.hit"
 LLM_CALLED = "llm.called"
 KNOWLEDGE_CREATED = "knowledge.created"
 FLOW_CREATED = "flow.created"
+FLOW_VERSIONED = "flow.versioned"
 EXECUTION_STARTED = "execution.started"
 EXECUTION_COMPLETED = "execution.completed"
 EXECUTION_FAILED = "execution.failed"
 EXECUTION_DENIED = "execution.denied"
+LEARNING_APPLIED = "learning.applied"
+
+EVENT_CHANNEL = "econ.events"
