@@ -59,21 +59,44 @@ def test_alias_requires_three_confirmations() -> None:
 
 
 @pytest.mark.django_db
-def test_persist_proposal_creates_versioned_flow() -> None:
+def test_persist_proposal_reuses_same_steps() -> None:
     proposal = HermesProposal(
         intent=IntentProposal(name="launch_program", create=False, confidence=0.9),
         entities=[EntityProposal(name="Firefox", type="application", create=True)],
         flow=FlowProposal(create=True, name="launch firefox"),
         actions=[ActionProposal(argv=["echo", "firefox"])],
     )
-    flow = persist_proposal(proposal, ["echo", "firefox"])
+    flow = persist_proposal(proposal, ["echo", "firefox"], text="lance firefox")
     assert flow is not None
     assert flow.version == 1
-    again = persist_proposal(proposal, ["echo", "firefox"])
+    assert flow.confidence >= 0.90
+    again = persist_proposal(proposal, ["echo", "firefox"], text="lance firefox")
     assert again is not None
-    assert again.version == 2
-    assert again.pk != flow.pk
+    assert again.pk == flow.pk
+    assert Flow.objects.filter(name="launch firefox").count() == 1
     assert Entity.objects.filter(normalized_name=normalize("Firefox")).exists()
+
+
+@pytest.mark.django_db
+def test_persist_proposal_versions_when_steps_change() -> None:
+    first = HermesProposal(
+        intent=IntentProposal(name="launch_program", confidence=0.9),
+        flow=FlowProposal(create=True, name="launch firefox"),
+        actions=[ActionProposal(argv=["echo", "firefox"])],
+    )
+    flow = persist_proposal(first, ["echo", "firefox"])
+    changed = HermesProposal(
+        intent=IntentProposal(name="launch_program", confidence=0.9),
+        flow=FlowProposal(create=True, name="launch firefox"),
+        actions=[ActionProposal(argv=["echo", "other"])],
+    )
+    again = persist_proposal(changed, ["echo", "other"])
+    assert again is not None
+    assert flow is not None
+    assert again.pk != flow.pk
+    assert again.version == 2
+    flow.refresh_from_db()
+    assert flow.enabled is False
 
 
 @pytest.mark.django_db

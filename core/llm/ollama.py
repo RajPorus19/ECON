@@ -42,6 +42,12 @@ class OllamaProvider:
                         "Never invent destructive commands. "
                         "Never request or echo secrets, API keys, or tokens. "
                         "Prefer argv over a single shell string. "
+                        "For HTTP actions set type to http and put url, method, body, "
+                        "and headers in extra; use env refs for secrets. "
+                        "When a remainder is a parameter (movie title, search query), "
+                        "put {query} in argv or extra instead of the literal value. "
+                        "Set triggers to the phrase prefixes that should replay this flow "
+                        "(without the parameter). "
                         "Reply with JSON only."
                     ),
                 },

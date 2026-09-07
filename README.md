@@ -2,7 +2,7 @@
 
 **ECON** (Execution & Cognitive Optimization Network) is a local automation runtime. It turns natural-language commands into deterministic, reusable flows so that Hermes (or another local LLM) is a teacher and fallback — not the hot path.
 
-Product spec: [SPECS.md](SPECS.md). Stack: [STACK.md](STACK.md).
+Product spec (learned-flow loop): [docs/LEARNED_FLOWS.md](docs/LEARNED_FLOWS.md). Architecture: [SPECS.md](SPECS.md). Stack: [STACK.md](STACK.md).
 
 Matching uses Redis cache layers L1–L4, then the database, then Hermes. Learning (confidence, aliases, metrics) runs on Celery, not on the voice/execute hot path. The TanStack Start UI lives in `web/`. Voice capture is a separate `econom-voice` client.
 

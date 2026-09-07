@@ -34,6 +34,7 @@ class ActionProposal(BaseModel):
     command: str | None = None
     argv: list[str] = Field(default_factory=list)
     parameters: dict = Field(default_factory=dict)
+    extra: dict = Field(default_factory=dict)
 
 
 class HermesProposal(BaseModel):
@@ -42,6 +43,7 @@ class HermesProposal(BaseModel):
     provider: ProviderProposal | None = None
     flow: FlowProposal | None = None
     actions: list[ActionProposal] = Field(default_factory=list)
+    triggers: list[str] = Field(default_factory=list)
     reason: str = ""
 
 

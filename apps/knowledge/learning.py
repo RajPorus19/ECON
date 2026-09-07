@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import json
+
 from django.utils import timezone
 
 from apps.flows.models import Action, ActionVersion, Flow, FlowEdge, FlowNode
 from apps.knowledge.models import Alias, AliasCandidate, Entity, Intent, IntentAlias, Provider
-from core.compiler import argv_from_action
+from core.compiler import CompileError, argv_from_action, compile_proposal
 from core.confidence import apply_outcome
-from core.learning import next_confirmation_count, should_promote_alias
+from core.execution import FlowStep, normalize_steps
+from core.learning import (
+    next_confirmation_count,
+    replacement_phrases,
+    should_promote_alias,
+    steps_signature,
+    strip_trailing_query,
+    template_steps,
+    trigger_phrases,
+)
 from core.llm import HermesProposal
 from core.normalize import normalize
 
@@ -186,22 +197,26 @@ def record_alias_candidate(
     return alias
 
 
-def persist_proposal(proposal: HermesProposal, argv: list[str]) -> Flow | None:
+def persist_proposal(
+    proposal: HermesProposal,
+    argv: list[str],
+    *,
+    text: str = "",
+    normalized: str = "",
+    steps: list[FlowStep] | list[dict] | None = None,
+    confidence_threshold: float = 0.90,
+) -> Flow | None:
     intent = None
     if proposal.intent:
         intent, _ = Intent.objects.get_or_create(
             name=proposal.intent.name,
             defaults={"confidence": proposal.intent.confidence or 0.7},
         )
-        if proposal.intent.create:
-            IntentAlias.objects.get_or_create(
-                normalized_phrase=normalize(proposal.intent.name.replace("_", " ")),
-                defaults={
-                    "intent": intent,
-                    "phrase": proposal.intent.name.replace("_", " "),
-                    "confidence": proposal.intent.confidence or 0.7,
-                },
-            )
+    else:
+        intent, _ = Intent.objects.get_or_create(
+            name="shell_execute",
+            defaults={"confidence": 0.7},
+        )
 
     entity = None
     for item in proposal.entities:
@@ -225,56 +240,166 @@ def persist_proposal(proposal: HermesProposal, argv: list[str]) -> Flow | None:
             defaults={"type": "plugin", "capabilities": []},
         )
 
-    action = Action.objects.filter(name="shell.execute").first()
-    if action is None:
-        action = Action.objects.create(
-            name="shell.execute",
-            type="shell",
-            executor="shell",
-            security_level=1,
-        )
-        ActionVersion.objects.create(
-            action=action,
-            version=1,
-            definition={"executor": "shell", "argv": argv},
-            enabled=True,
-            verified=False,
-        )
+    try:
+        compiled = normalize_steps(steps) if steps else compile_proposal(proposal)
+    except CompileError:
+        compiled = [FlowStep(executor="shell", argv=list(argv))] if argv else []
+    if not compiled and argv:
+        compiled = [FlowStep(executor="shell", argv=list(argv))]
+    if not compiled:
+        return None
+
+    ntext = normalized or normalize(text)
+    replacements = replacement_phrases(proposal, ntext)
+    templated = template_steps(compiled, replacements)
+    query_for_triggers = ""
+    for phrase in sorted(replacements, key=len, reverse=True):
+        if strip_trailing_query(ntext, phrase) != ntext or ntext == normalize(phrase):
+            query_for_triggers = phrase
+            break
+    triggers = trigger_phrases(
+        normalized=ntext,
+        query=query_for_triggers,
+        extra=proposal.triggers,
+    )
+    bind_intent_triggers(intent, triggers)
+
+    learned_confidence = max(float(confidence_threshold), 0.90)
+    existing = _reusable_flow(intent, templated)
+    if existing is not None:
+        if existing.confidence < learned_confidence:
+            existing.confidence = learned_confidence
+            existing.save(update_fields=["confidence"])
+        return existing
 
     flow_name = proposal.flow.name if proposal.flow and proposal.flow.name else None
     if not flow_name:
         bits = [intent.name if intent else "request"]
-        if entity:
-            bits.append(entity.name)
+        if entity and not any("{query}" in part for step in templated for part in step.argv):
+            extra_blob = json.dumps([step.extra for step in templated])
+            if "{query}" not in extra_blob:
+                bits.append(entity.name)
         flow_name = " / ".join(bits)
 
+    previous = Flow.objects.filter(name=flow_name, enabled=True).order_by("-version").first()
     flow = Flow.objects.create(
         name=flow_name,
         intent=intent,
         version=next_flow_version(flow_name),
-        confidence=0.7,
+        confidence=learned_confidence,
         enabled=True,
     )
-    resolve = FlowNode.objects.create(
-        flow=flow,
-        node_key="resolve_entity",
-        node_type="resolve_entity",
-        entity=entity,
-        provider=provider,
-        position=0,
+    if previous is not None:
+        previous.enabled = False
+        previous.save(update_fields=["enabled"])
+
+    parameterized = any("{query}" in part for step in templated for part in step.argv) or any(
+        "{query}" in json.dumps(step.extra or {}) for step in templated
     )
-    execute = FlowNode.objects.create(
-        flow=flow,
-        node_key="execute",
-        node_type="action",
-        action=action,
-        entity=entity,
-        provider=provider,
-        position=1,
-        config={"argv": argv},
-    )
-    FlowEdge.objects.create(flow=flow, source_node=resolve, target_node=execute)
+    attach_entity = entity if entity and not parameterized else None
+
+    if attach_entity or provider:
+        FlowNode.objects.create(
+            flow=flow,
+            node_key="resolve_entity",
+            node_type="resolve_entity",
+            entity=attach_entity,
+            provider=provider,
+            position=0,
+        )
+    position = 1 if flow.nodes.exists() else 0
+    previous_node = flow.nodes.order_by("position").last()
+    for index, step in enumerate(templated):
+        action = _action_for_step(step)
+        node = FlowNode.objects.create(
+            flow=flow,
+            node_key="execute" if index == 0 else f"execute_{index}",
+            node_type="action",
+            action=action,
+            entity=attach_entity,
+            provider=provider,
+            position=position + index,
+            config={"argv": list(step.argv), "extra": dict(step.extra or {})},
+        )
+        if previous_node is not None:
+            FlowEdge.objects.create(flow=flow, source_node=previous_node, target_node=node)
+        previous_node = node
     return flow
+
+
+def bind_intent_triggers(intent: Intent, phrases: list[str], *, confidence: float = 1.0) -> None:
+    for raw in phrases:
+        phrase = raw.strip()
+        if not phrase:
+            continue
+        folded = normalize(phrase)
+        if not folded:
+            continue
+        IntentAlias.objects.get_or_create(
+            normalized_phrase=folded,
+            defaults={"intent": intent, "phrase": phrase, "confidence": confidence},
+        )
+
+
+def _action_for_step(step: FlowStep) -> Action:
+    if (step.executor or "").lower() == "http":
+        name = "http.request"
+        defaults = {
+            "type": "http",
+            "description": "HTTP request",
+            "executor": "http",
+            "security_level": 2,
+        }
+    else:
+        name = "shell.execute"
+        defaults = {
+            "type": "shell",
+            "description": "Execute an argv list on the host",
+            "executor": "shell",
+            "security_level": 1,
+        }
+    action, created = Action.objects.get_or_create(name=name, defaults=defaults)
+    if created or not action.versions.exists():
+        ActionVersion.objects.get_or_create(
+            action=action,
+            version=1,
+            defaults={
+                "definition": {
+                    "executor": action.executor,
+                    "argv": list(step.argv),
+                    "extra": dict(step.extra or {}),
+                },
+                "enabled": True,
+                "verified": False,
+            },
+        )
+    return action
+
+
+def _reusable_flow(intent: Intent | None, templated: list[FlowStep]) -> Flow | None:
+    if intent is None:
+        return None
+    wanted = steps_signature(templated)
+    for flow in Flow.objects.filter(intent=intent, enabled=True).order_by("-version"):
+        if _flow_signature(flow) == wanted:
+            return flow
+    return None
+
+
+def _flow_signature(flow: Flow) -> tuple:
+    steps: list[FlowStep] = []
+    for node in flow.nodes.filter(node_type="action").order_by("position"):
+        cfg = node.config if isinstance(node.config, dict) else {}
+        executor = (node.action.executor if node.action else "shell") or "shell"
+        steps.append(
+            FlowStep(
+                executor=executor,
+                argv=[str(part) for part in cfg.get("argv") or []],
+                extra=dict(cfg.get("extra") or {}),
+                security_level=node.action.security_level if node.action else None,
+            )
+        )
+    return steps_signature(steps)
 
 
 def argv_from_proposal_action(proposal: HermesProposal) -> list[str]:

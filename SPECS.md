@@ -1,5 +1,7 @@
 Oui. Je te propose de spécifier **ECON comme un vrai produit**, avec une architecture suffisamment précise pour commencer à coder directement, mais sans over-engineering inutile.
 
+**Product loop (source of truth):** [docs/LEARNED_FLOWS.md](docs/LEARNED_FLOWS.md) — unknown request → local Hermes compiles and runs → ECON stores a templated flow + trigger phrases → later phrases match locally with no LLM.
+
 # ECON — Complete Technical Specification
 
 ## 1. Vision

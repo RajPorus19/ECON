@@ -43,7 +43,13 @@ def learn_from_execution(request_id: int) -> str:
 
     if proposal and success:
         argv = list(log.execution.argv) if log.execution else []
-        created = persist_proposal(proposal, argv)
+        created = persist_proposal(
+            proposal,
+            argv,
+            text=log.text,
+            normalized=log.normalized_text,
+            confidence_threshold=float(str(settings.ECON.get("CONFIDENCE_THRESHOLD", 0.90))),
+        )
         if created is not None:
             log.flow = created
             log.intent = created.intent or log.intent

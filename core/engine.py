@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from core import events
 from core.cache import CachedResolution, PhraseCache, lookup_layers
-from core.compiler import CompileError, first_argv
+from core.compiler import CompileError, compile_proposal
 from core.confidence import combined_confidence, meets_threshold
 from core.embeddings import EmbeddingBackend, NullEmbeddingBackend
 from core.events import EventBus
@@ -25,9 +25,10 @@ from core.execution import (
 )
 from core.execution.http import interpolate_command, interpolate_mapping, json_bindings
 from core.execution.registry import executor_for
+from core.learning import contains_query_token
 from core.llm import HermesProposal, LLMProvider
 from core.matching import longest_prefix_match, match_entity
-from core.normalize import normalize
+from core.normalize import normalize, original_span
 from core.secrets import redact_mapping
 from core.security import Decision, SecurityLevel, SecurityPolicy, SecurityVerdict, evaluate
 from core.tokens import DEFAULT_ESTIMATED_BASELINE, estimated_tokens_saved
@@ -47,6 +48,7 @@ class MatchSnapshot:
     known: bool = False
     method: str = ""
     ambiguous_entity: bool = False
+    query: str = ""
 
 
 @dataclass
@@ -154,7 +156,7 @@ class Pipeline:
             self.bus.emit(events.REQUEST_MATCHED, {"flow_id": match.flow_id, "layer": cache_layer})
 
         if not steps:
-            match = self._match(normalized)
+            match = self._match(normalized, original=text)
             if match.intent_name and self.cache:
                 l3 = self.cache.get_intent_entity(match.intent_name, match.entity_name)
                 if l3 and (l3.argv or l3.steps):
@@ -181,7 +183,7 @@ class Pipeline:
                     if meets_threshold(match.combined, self.confidence_threshold) and known_steps:
                         steps = known_steps
                         argv = flatten_argv(steps)
-                        if self.cache:
+                        if self.cache and not contains_query_token(steps):
                             l4 = self.cache.get_flow(flow_id)
                             if l4 and (l4.argv or l4.steps):
                                 steps = normalize_steps(l4.steps or l4.argv)
@@ -230,7 +232,8 @@ class Pipeline:
             completion_tokens = llm_result.usage.completion_tokens
             self.bus.emit(events.LLM_CALLED, {"reason": "unknown_flow"})
             try:
-                argv = first_argv(proposal)
+                steps = compile_proposal(proposal)
+                argv = flatten_argv(steps)
             except CompileError as exc:
                 return self._finish(
                     started,
@@ -246,13 +249,13 @@ class Pipeline:
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                 )
-            steps = [FlowStep(executor="shell", argv=argv)]
             if proposal.intent:
                 match.intent_name = match.intent_name or proposal.intent.name
                 match.intent_confidence = match.intent_confidence or proposal.intent.confidence
             if proposal.entities:
                 match.entity_name = match.entity_name or proposal.entities[0].name
                 match.entity_confidence = match.entity_confidence or proposal.entities[0].confidence
+                match.query = match.query or proposal.entities[0].name
             if proposal.provider:
                 match.provider_name = proposal.provider.name
             reason = proposal.reason
@@ -338,7 +341,7 @@ class Pipeline:
             return None
         return lookup_layers(self.cache, phrase=text, normalized=normalized)
 
-    def _match(self, normalized: str) -> MatchSnapshot:
+    def _match(self, normalized: str, *, original: str = "") -> MatchSnapshot:
         intent_hit = longest_prefix_match(normalized, self.knowledge.intent_aliases())
         entity_hit = None
         remainder = normalized
@@ -381,6 +384,11 @@ class Pipeline:
         )
         known = bool(flow and meets_threshold(combined, self.confidence_threshold) and flow[2])
         ambiguous = bool(entity_hit and entity_hit.method in {"prefix", "fuzzy", "semantic"})
+        query = ""
+        if entity_hit:
+            query = entity_hit.name
+        elif intent_hit and intent_hit.remainder:
+            query = original_span(original, intent_hit.remainder) or intent_hit.remainder
         return MatchSnapshot(
             intent_name=intent_hit.name if intent_hit else None,
             intent_confidence=intent_hit.confidence if intent_hit else 0.0,
@@ -394,12 +402,13 @@ class Pipeline:
             known=known,
             method=(entity_hit.method if entity_hit else (intent_hit.method if intent_hit else "")),
             ambiguous_entity=ambiguous,
+            query=query,
         )
 
     def _bind_parameters(self, match: MatchSnapshot, text: str) -> dict[str, Any]:
         params: dict[str, Any] = {
-            "query": match.entity_name or "",
-            "entity": match.entity_name or "",
+            "query": match.entity_name or match.query or "",
+            "entity": match.entity_name or match.query or "",
             "intent": match.intent_name or "",
             "text": text,
         }
