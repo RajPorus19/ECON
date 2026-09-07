@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-econ}
+      POSTGRES_USER: ${POSTGRES_USER:-econ}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-econ}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-econ} -d ${POSTGRES_DB:-econ}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      # Hermes/Ollama and the host agent run on the host, not in Compose.
+      # https://docs.docker.com/compose/how-tos/networking/
+      ECON_LLM_BASE_URL: http://host.docker.internal:11434
+      ECON_EXECUTION_MODE: host_agent
+      ECON_HOST_AGENT_URL: http://host.docker.internal:8765
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    build: .
+    command: celery -A config worker -l info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      ECON_LLM_BASE_URL: http://host.docker.internal:11434
+      ECON_EXECUTION_MODE: host_agent
+      ECON_HOST_AGENT_URL: http://host.docker.internal:8765
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres_data:
