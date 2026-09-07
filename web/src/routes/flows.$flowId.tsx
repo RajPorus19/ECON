@@ -1,14 +1,17 @@
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Background,
   Controls,
   ReactFlow,
   type Edge,
   type Node,
+  useEdgesState,
+  useNodesState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useEffect } from "react";
 import { z } from "zod";
 import { Button } from "../components/ui/button";
 import { apiGet, apiSend, type FlowRow } from "../lib/api";
@@ -23,44 +26,97 @@ const schema = z.object({
   enabled: z.boolean(),
 });
 
+function flowToGraph(flow: FlowRow): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = flow.nodes.map((node, index) => {
+    const ui = node.config?.ui as { x?: number; y?: number } | undefined;
+    return {
+      id: String(node.id),
+      position: { x: ui?.x ?? 40, y: ui?.y ?? index * 110 },
+      data: { label: `${node.node_type}: ${node.node_key}`, node_key: node.node_key, node_type: node.node_type },
+    };
+  });
+  const edges: Edge[] = flow.edges.map((edge) => ({
+    id: String(edge.id),
+    source: String(edge.source_node),
+    target: String(edge.target_node),
+  }));
+  return { nodes, edges };
+}
+
 function FlowEditorPage() {
   const { flowId } = Route.useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["flow", flowId],
     queryFn: () => apiGet<FlowRow>(`/api/v1/flows/${flowId}`),
   });
   const flow = query.data;
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  const save = useMutation({
+  const form = useForm({
+    defaultValues: {
+      name: "",
+      description: "",
+      enabled: true,
+    },
+    validators: { onChange: schema },
+    onSubmit: ({ value }) => saveMeta.mutateAsync(value),
+  });
+
+  useEffect(() => {
+    if (!flow) return;
+    form.reset({
+      name: flow.name,
+      description: flow.description ?? "",
+      enabled: flow.enabled,
+    });
+    const graph = flowToGraph(flow);
+    setNodes(graph.nodes);
+    setEdges(graph.edges);
+  }, [flow, form, setEdges, setNodes]);
+
+  const saveMeta = useMutation({
     mutationFn: (values: z.infer<typeof schema>) =>
       apiSend(`/api/v1/flows/${flowId}`, "PATCH", values),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["flow", flowId] }),
   });
 
-  const form = useForm({
-    defaultValues: {
-      name: flow?.name ?? "",
-      description: flow?.description ?? "",
-      enabled: flow?.enabled ?? true,
+  const saveGraph = useMutation({
+    mutationFn: () =>
+      apiSend<FlowRow>(`/api/v1/flows/${flowId}`, "PATCH", {
+        name: form.state.values.name || flow?.name,
+        description: form.state.values.description ?? flow?.description,
+        enabled: form.state.values.enabled,
+        nodes: nodes.map((node, index) => {
+          const original = flow?.nodes.find((item) => String(item.id) === node.id);
+          return {
+            id: Number(node.id),
+            node_key: (node.data as { node_key?: string }).node_key ?? original?.node_key ?? node.id,
+            node_type: (node.data as { node_type?: string }).node_type ?? original?.node_type ?? "action",
+            position: index,
+            x: node.position.x,
+            y: node.position.y,
+            config: original?.config ?? {},
+          };
+        }),
+        edges: edges.map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+        })),
+      }),
+    onSuccess: (updated) => {
+      if (updated && String(updated.id) !== flowId) {
+        void navigate({ to: "/flows/$flowId", params: { flowId: String(updated.id) } });
+        return;
+      }
+      void queryClient.invalidateQueries({ queryKey: ["flow", flowId] });
     },
-    validators: { onChange: schema },
-    onSubmit: ({ value }) => save.mutateAsync(value),
   });
 
   if (query.isLoading) return <p>Loading flow…</p>;
   if (!flow) return <p>Flow not found.</p>;
-
-  const nodes: Node[] = flow.nodes.map((node, index) => ({
-    id: String(node.id),
-    position: { x: 40, y: index * 110 },
-    data: { label: `${node.node_type}: ${node.node_key}` },
-  }));
-  const edges: Edge[] = flow.edges.map((edge) => ({
-    id: String(edge.id),
-    source: String(edge.source_node),
-    target: String(edge.target_node),
-  }));
 
   return (
     <div className="space-y-4">
@@ -102,6 +158,9 @@ function FlowEditorPage() {
         </form.Field>
         <div className="flex flex-wrap gap-2">
           <Button type="submit">Save metadata</Button>
+          <Button type="button" variant="outline" onClick={() => saveGraph.mutate()}>
+            Save graph (new version)
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -133,7 +192,13 @@ function FlowEditorPage() {
         </div>
       </form>
       <div className="h-[420px] rounded-lg border border-stone-300 bg-white">
-        <ReactFlow nodes={nodes} edges={edges} fitView>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          fitView
+        >
           <Controls />
           <Background />
         </ReactFlow>

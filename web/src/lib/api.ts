@@ -81,3 +81,14 @@ export type FlowRow = {
     target_node: number;
   }>;
 };
+
+export type GraphNodeDetail = {
+  id: string;
+  name: string;
+  type: string;
+  confidence: number;
+  usage: number;
+  aliases: string[];
+  connected_flows: string[];
+  last_execution: { id: number; text: string; status: string; created_at: string | null } | null;
+};

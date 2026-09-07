@@ -60,6 +60,80 @@ def clone_flow_version(flow: Flow, *, enabled: bool = True) -> Flow:
     return clone
 
 
+def apply_graph_version(flow: Flow, payload: dict) -> Flow:
+    """Persist node/edge edits onto a new version. Never mutates the source graph."""
+    clone = clone_flow_version(flow, enabled=True)
+    if "name" in payload and payload["name"]:
+        clone.name = str(payload["name"])
+    if "description" in payload:
+        clone.description = str(payload["description"] or "")
+    if "enabled" in payload:
+        clone.enabled = bool(payload["enabled"])
+    clone.save()
+
+    raw_nodes = payload.get("nodes")
+    raw_edges = payload.get("edges")
+    if raw_nodes is None and raw_edges is None:
+        flow.enabled = False
+        flow.save(update_fields=["enabled"])
+        return clone
+
+    old_by_id = {node.pk: node for node in flow.nodes.all()}
+    old_by_key = {node.node_key: node for node in flow.nodes.all()}
+    clone.edges.all().delete()
+    clone.nodes.all().delete()
+
+    key_map: dict[str, FlowNode] = {}
+    for index, item in enumerate(raw_nodes or []):
+        if not isinstance(item, dict):
+            continue
+        node_key = str(item.get("node_key") or item.get("id") or f"node_{index}")
+        source = None
+        raw_id = item.get("id")
+        if raw_id is not None and str(raw_id).isdigit():
+            source = old_by_id.get(int(raw_id))
+        source = source or old_by_key.get(node_key)
+        config = dict(item.get("config") or (source.config if source else {}) or {})
+        if "x" in item or "y" in item:
+            config["ui"] = {"x": item.get("x"), "y": item.get("y")}
+        raw_pos = item.get("position")
+        position = int(raw_pos) if isinstance(raw_pos, (int, float, str)) else index
+        created = FlowNode.objects.create(
+            flow=clone,
+            node_key=node_key[:64],
+            node_type=str(item.get("node_type") or (source.node_type if source else "action")),
+            action=source.action if source else None,
+            entity=source.entity if source else None,
+            provider=source.provider if source else None,
+            position=position,
+            config=config,
+        )
+        key_map[str(item.get("id") or node_key)] = created
+        key_map[node_key] = created
+        if source:
+            key_map[str(source.pk)] = created
+
+    for item in raw_edges or []:
+        if not isinstance(item, dict):
+            continue
+        source_ref = str(item.get("source") or item.get("source_node") or "")
+        target_ref = str(item.get("target") or item.get("target_node") or "")
+        source_node = key_map.get(source_ref)
+        target_node = key_map.get(target_ref)
+        if source_node is None or target_node is None:
+            continue
+        FlowEdge.objects.create(
+            flow=clone,
+            source_node=source_node,
+            target_node=target_node,
+            condition=item.get("condition") or {},
+        )
+
+    flow.enabled = False
+    flow.save(update_fields=["enabled"])
+    return clone
+
+
 def apply_usage(
     *, intent: Intent | None, entity: Entity | None, flow: Flow | None, success: bool
 ) -> None:

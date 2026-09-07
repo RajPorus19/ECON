@@ -4,7 +4,7 @@ from rest_framework.permissions import AllowAny
 
 from apps.knowledge.serializers import LlmCallSerializer
 from apps.llm.models import LlmCall
-from apps.requests.graph import GraphView, RequestLogViewSet
+from apps.requests.graph import GraphDetailView, GraphView, RequestLogViewSet
 from apps.requests.views import ExecuteView, HealthView
 
 
@@ -23,5 +23,6 @@ urlpatterns = [
     path("health", HealthView.as_view(), name="api-health"),
     path("execute", ExecuteView.as_view(), name="api-execute"),
     path("graph", GraphView.as_view(), name="api-graph"),
+    path("graph/detail", GraphDetailView.as_view(), name="api-graph-detail"),
     *router.urls,
 ]

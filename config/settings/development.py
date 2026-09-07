@@ -4,6 +4,10 @@ from .base import *  # noqa: F403
 
 DEBUG = env_bool("DJANGO_DEBUG", True)
 
+# Native `econom start` does not spawn a worker. Run learning inline unless overridden.
+CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", True)
+CELERY_TASK_EAGER_PROPAGATES = True
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",

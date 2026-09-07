@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from django.conf import settings
 
 from apps.execution.models import ExecutionAudit, ExecutionStatus
-from apps.flows.models import Action, ActionVersion, Flow
+from apps.flows.models import Action, ActionVersion, Flow, FlowNode
 from apps.knowledge.models import Alias, Entity, Intent, IntentAlias, Provider
 from apps.llm.models import LlmCall
 from apps.requests.models import RequestLog
 from apps.requests.runtime import bus_with_redis, get_phrase_cache
 from core.cache import CachedResolution
+from core.embeddings import HashEmbeddingBackend
 from core.engine import Pipeline, PipelineResult
+from core.execution import FlowStep
 from core.execution.host_agent import HostAgentExecutor
 from core.execution.local import LocalSubprocessExecutor
 from core.llm.ollama import OllamaProvider
@@ -46,9 +50,17 @@ class DjangoKnowledge:
     def action_names(self) -> list[str]:
         return list(Action.objects.values_list("name", flat=True))
 
+    def entity_metadata(self, entity_name: str) -> dict[str, Any]:
+        entity = Entity.objects.filter(name=entity_name).first()
+        if entity is None:
+            entity = Entity.objects.filter(normalized_name=entity_name.lower()).first()
+        if entity is None or not isinstance(entity.metadata, dict):
+            return {}
+        return dict(entity.metadata)
+
     def find_flow(
         self, intent_name: str, entity_name: str | None
-    ) -> tuple[str, float, list[str]] | None:
+    ) -> tuple[str, float, list[str] | list[dict[str, Any]]] | None:
         if not intent_name:
             return None
         qs = Flow.objects.filter(intent__name=intent_name, enabled=True)
@@ -63,29 +75,81 @@ class DjangoKnowledge:
             )
         if flow is None:
             return None
-        argv = _argv_for_flow(flow)
-        if not argv:
+        steps = _steps_for_flow(flow, entity_name)
+        if not steps:
             return None
-        return str(flow.pk), float(flow.confidence), argv
+        return str(flow.pk), float(flow.confidence), [step.to_dict() for step in steps]
 
 
-def _argv_for_flow(flow: Flow) -> list[str]:
-    node = flow.nodes.filter(action__isnull=False).order_by("position").first()
-    if node is None or node.action_id is None:
-        return []
+def _steps_for_flow(flow: Flow, entity_name: str | None) -> list[FlowStep]:
+    entity = None
+    if entity_name:
+        entity = Entity.objects.filter(name=entity_name).first()
+    metadata = dict(entity.metadata) if entity and isinstance(entity.metadata, dict) else {}
+    query = (entity.name if entity else entity_name) or ""
+    action_nodes = list(flow.nodes.filter(action__isnull=False).order_by("position"))
+    action_names = [node.action.name for node in action_nodes if node.action]
+    intent = flow.intent
+    intent_name = intent.name if intent is not None else ""
+
+    if intent_name == "play_media" and any(name.startswith("jellyfin.") for name in action_names):
+        from plugins.jellyfin import compose_play_steps
+
+        return compose_play_steps(query=query, metadata=metadata)
+    if "jellyfin.play" in action_names and "jellyfin.search" not in action_names:
+        from plugins.jellyfin import compose_play_steps
+
+        return compose_play_steps(query=query, metadata=metadata)
+
+    steps: list[FlowStep] = []
+    for node in action_nodes:
+        step = _step_for_node(node, metadata=metadata, query=query)
+        if step is not None:
+            steps.append(step)
+    return steps
+
+
+def _step_for_node(node: FlowNode, *, metadata: dict[str, Any], query: str) -> FlowStep | None:
+    action = node.action
+    if action is None:
+        return None
+    name = action.name
+    if name == "steam.launch":
+        from plugins.steam import resolve_launch
+
+        return resolve_launch(metadata=metadata, entity_name=query)
+    if name.startswith("jellyfin."):
+        from plugins.jellyfin import resolve_action
+
+        return resolve_action(name, query=query, metadata=metadata)
+    argv: list[str] = []
+    extra = dict(node.config.get("extra") or {}) if isinstance(node.config, dict) else {}
     if isinstance(node.config.get("argv"), list) and node.config["argv"]:
-        return [str(part) for part in node.config["argv"]]
-    version = (
-        ActionVersion.objects.filter(action_id=node.action_id, enabled=True)
-        .order_by("-version")
-        .first()
+        argv = [str(part) for part in node.config["argv"]]
+    else:
+        version = (
+            ActionVersion.objects.filter(action_id=action.pk, enabled=True)
+            .order_by("-version")
+            .first()
+        )
+        definition = (version.definition or {}) if version else {}
+        if isinstance(definition.get("argv"), list) and definition["argv"]:
+            argv = [str(part) for part in definition["argv"]]
+        elif isinstance(definition.get("command"), list) and definition["command"]:
+            argv = [str(part) for part in definition["command"]]
+        if isinstance(definition.get("extra"), dict):
+            extra = dict(definition["extra"])
+    executor = action.executor or "shell"
+    if not argv and executor == "http":
+        argv = ["http"]
+    if not argv:
+        return None
+    return FlowStep(
+        executor=executor,
+        argv=argv,
+        extra=extra,
+        security_level=action.security_level,
     )
-    if version is None:
-        return []
-    definition = version.definition or {}
-    if isinstance(definition.get("argv"), list) and definition["argv"]:
-        return [str(part) for part in definition["argv"]]
-    return []
 
 
 def build_executor():
@@ -114,6 +178,7 @@ def build_pipeline(llm: OllamaProvider | None | object = ...) -> Pipeline:
         llm=provider,  # type: ignore[arg-type]
         bus=bus_with_redis(),
         cache=get_phrase_cache(),
+        embedder=HashEmbeddingBackend(),
         confidence_threshold=float(str(cfg.get("CONFIDENCE_THRESHOLD", 0.90))),
         semantic_threshold=float(str(cfg.get("SEMANTIC_THRESHOLD", 0.82))),
         timeout_s=float(str(cfg.get("EXECUTION_TIMEOUT", 30))),
@@ -199,7 +264,7 @@ def persist_result(text: str, normalized: str, result: PipelineResult) -> Reques
             duration_ms=result.execution_time_ms,
         )
 
-    if result.status in {"success", "failed"} and result.argv:
+    if result.status in {"success", "failed"} and (result.argv or result.steps):
         cache = get_phrase_cache()
         cached = CachedResolution(
             intent_name=result.intent,
@@ -208,6 +273,7 @@ def persist_result(text: str, normalized: str, result: PipelineResult) -> Reques
             flow_id=result.flow_id,
             flow_confidence=result.combined_confidence or 1.0,
             argv=result.argv,
+            steps=result.steps,
         )
         if result.status == "success":
             cache.put_exact(text, cached)
@@ -217,9 +283,9 @@ def persist_result(text: str, normalized: str, result: PipelineResult) -> Reques
             if result.flow_id:
                 cache.put_flow(result.flow_id, cached)
 
-    from apps.knowledge.tasks import learn_from_execution
+    from apps.knowledge.tasks import enqueue_learn_from_execution
 
-    learn_from_execution.delay(log.pk)
+    enqueue_learn_from_execution(log.pk)
     return log
 
 

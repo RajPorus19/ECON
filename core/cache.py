@@ -15,6 +15,7 @@ class CachedResolution:
     flow_id: str | None = None
     flow_confidence: float = 0.0
     argv: list[str] = field(default_factory=list)
+    steps: list[dict[str, Any]] = field(default_factory=list)
     layer: str = ""
 
     def to_json(self) -> str:
@@ -23,7 +24,10 @@ class CachedResolution:
     @classmethod
     def from_json(cls, raw: str) -> CachedResolution:
         data = json.loads(raw)
-        return cls(**data)
+        data.setdefault("steps", [])
+        data.setdefault("argv", [])
+        allowed = set(cls.__dataclass_fields__)
+        return cls(**{k: v for k, v in data.items() if k in allowed})
 
 
 class PhraseCache(Protocol):
@@ -118,6 +122,10 @@ class RedisPhraseCache:
 
     def _put(self, key: str, value: CachedResolution) -> None:
         self.client.set(key, value.to_json(), ex=self.ttl_seconds)
+        if value.flow_id:
+            idx = f"{self.prefix}:flowidx:{value.flow_id}"
+            self.client.sadd(idx, key)
+            self.client.expire(idx, self.ttl_seconds)
 
     def get_exact(self, phrase: str) -> CachedResolution | None:
         return self._get(self._key("l1", phrase), "L1")
@@ -144,7 +152,12 @@ class RedisPhraseCache:
         self._put(self._key("l4", flow_id), value)
 
     def invalidate_flow(self, flow_id: str) -> None:
-        self.client.delete(self._key("l4", flow_id))
+        idx = f"{self.prefix}:flowidx:{flow_id}"
+        keys = list(self.client.smembers(idx) or [])
+        decoded = [key.decode("utf-8") if isinstance(key, bytes) else str(key) for key in keys]
+        decoded.append(self._key("l4", flow_id))
+        decoded.append(idx)
+        self.client.delete(*decoded)
 
 
 def _with_layer(hit: CachedResolution | None, layer: str) -> CachedResolution | None:
@@ -164,17 +177,17 @@ def lookup_layers(
     flow_id: str | None = None,
 ) -> CachedResolution | None:
     hit = cache.get_exact(phrase)
-    if hit and hit.argv:
+    if hit and (hit.argv or hit.steps):
         return hit
     hit = cache.get_normalized(normalized)
-    if hit and hit.argv:
+    if hit and (hit.argv or hit.steps):
         return hit
     if intent:
         hit = cache.get_intent_entity(intent, entity)
-        if hit and hit.argv:
+        if hit and (hit.argv or hit.steps):
             return hit
     if flow_id:
         hit = cache.get_flow(flow_id)
-        if hit and hit.argv:
+        if hit and (hit.argv or hit.steps):
             return hit
     return None

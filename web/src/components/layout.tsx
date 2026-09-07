@@ -5,6 +5,7 @@ const NAV = [
   { to: "/", label: "Dashboard" },
   { to: "/requests", label: "Requests" },
   { to: "/knowledge", label: "Knowledge" },
+  { to: "/flows", label: "Flows" },
   { to: "/graph", label: "Graph" },
   { to: "/hermes", label: "Hermes" },
   { to: "/optimizations", label: "Optimizations" },

@@ -6,6 +6,18 @@ from apps.requests.models import RequestLog
 from core.llm import HermesProposal
 
 
+def _run_or_inline(task, *args) -> object:
+    """Queue on Celery; if the broker is down, run the task in-process."""
+    try:
+        return task.delay(*args)
+    except Exception:  # noqa: BLE001 — native `econom start` has no worker
+        return task(*args)
+
+
+def enqueue_learn_from_execution(request_id: int) -> object:
+    return _run_or_inline(learn_from_execution, request_id)
+
+
 @shared_task
 def learn_from_execution(request_id: int) -> str:
     log = (
@@ -62,5 +74,5 @@ def learn_from_execution(request_id: int) -> str:
 
     from apps.analytics.tasks import record_request_metric
 
-    record_request_metric.delay(request_id)
+    _run_or_inline(record_request_metric, request_id)
     return "learned"

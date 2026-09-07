@@ -15,12 +15,21 @@ from core.compiler import CompileError, first_argv
 from core.confidence import combined_confidence, meets_threshold
 from core.embeddings import EmbeddingBackend, NullEmbeddingBackend
 from core.events import EventBus
-from core.execution import ExecuteRequest, ExecuteResult, Executor
+from core.execution import (
+    ExecuteRequest,
+    ExecuteResult,
+    Executor,
+    FlowStep,
+    flatten_argv,
+    normalize_steps,
+)
+from core.execution.http import interpolate_command, interpolate_mapping, json_bindings
+from core.execution.registry import executor_for
 from core.llm import HermesProposal, LLMProvider
 from core.matching import longest_prefix_match, match_entity
 from core.normalize import normalize
 from core.secrets import redact_mapping
-from core.security import Decision, SecurityPolicy, SecurityVerdict, evaluate
+from core.security import Decision, SecurityLevel, SecurityPolicy, SecurityVerdict, evaluate
 from core.tokens import DEFAULT_ESTIMATED_BASELINE, estimated_tokens_saved
 
 
@@ -65,6 +74,7 @@ class PipelineResult:
     original_text: str = ""
     normalized_text: str = ""
     ambiguous_entity: bool = False
+    steps: list[dict[str, Any]] = field(default_factory=list)
 
 
 class KnowledgeSource(Protocol):
@@ -74,8 +84,8 @@ class KnowledgeSource(Protocol):
 
     def find_flow(
         self, intent_name: str, entity_name: str | None
-    ) -> tuple[str, float, list[str]] | None:
-        """Return (flow_id, confidence, argv) if a known flow exists."""
+    ) -> tuple[str, float, list[str] | list[dict[str, Any]]] | None:
+        """Return (flow_id, confidence, argv or step dicts) if a known flow exists."""
         ...
 
 
@@ -116,13 +126,16 @@ class Pipeline:
         llm_used = False
         proposal: HermesProposal | None = None
         argv: list[str] = []
+        steps: list[FlowStep] = []
         reason = ""
         prompt_tokens = 0
         completion_tokens = 0
         cache_layer = ""
+        verdict: SecurityVerdict | None = None
 
-        if cache_hit and cache_hit.argv:
-            argv = list(cache_hit.argv)
+        if cache_hit and (cache_hit.argv or cache_hit.steps):
+            steps = normalize_steps(cache_hit.steps or cache_hit.argv)
+            argv = flatten_argv(steps) or list(cache_hit.argv)
             cache_layer = cache_hit.layer
             match = MatchSnapshot(
                 intent_name=cache_hit.intent_name,
@@ -140,12 +153,22 @@ class Pipeline:
             self.bus.emit(events.CACHE_HIT, {"layer": cache_layer, "flow_id": match.flow_id})
             self.bus.emit(events.REQUEST_MATCHED, {"flow_id": match.flow_id, "layer": cache_layer})
 
-        if not argv:
+        if not steps:
             match = self._match(normalized)
-            if match.known and match.flow_id:
+            if match.intent_name and self.cache:
+                l3 = self.cache.get_intent_entity(match.intent_name, match.entity_name)
+                if l3 and (l3.argv or l3.steps):
+                    steps = normalize_steps(l3.steps or l3.argv)
+                    argv = flatten_argv(steps) or list(l3.argv)
+                    cache_layer = "L3"
+                    match.flow_id = l3.flow_id or match.flow_id
+                    match.known = True
+                    match.method = "cache_l3"
+                    self.bus.emit(events.CACHE_HIT, {"layer": "L3", "flow_id": match.flow_id})
+            if not steps and match.known and match.flow_id:
                 known = self.knowledge.find_flow(match.intent_name or "", match.entity_name)
                 if known:
-                    flow_id, confidence, known_argv = known
+                    flow_id, confidence, known_raw = known
                     match.flow_id = flow_id
                     match.flow_confidence = confidence
                     match.combined = combined_confidence(
@@ -154,16 +177,19 @@ class Pipeline:
                         match.provider_confidence,
                         confidence,
                     )
-                    if meets_threshold(match.combined, self.confidence_threshold) and known_argv:
-                        argv = known_argv
+                    known_steps = normalize_steps(known_raw)
+                    if meets_threshold(match.combined, self.confidence_threshold) and known_steps:
+                        steps = known_steps
+                        argv = flatten_argv(steps)
                         if self.cache:
                             l4 = self.cache.get_flow(flow_id)
-                            if l4 and l4.argv:
-                                argv = list(l4.argv)
+                            if l4 and (l4.argv or l4.steps):
+                                steps = normalize_steps(l4.steps or l4.argv)
+                                argv = flatten_argv(steps) or list(l4.argv)
                                 cache_layer = "L4"
                         self.bus.emit(events.REQUEST_MATCHED, {"flow_id": match.flow_id})
 
-        if not argv:
+        if not steps:
             if self.llm is None:
                 return self._finish(
                     started,
@@ -220,6 +246,7 @@ class Pipeline:
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                 )
+            steps = [FlowStep(executor="shell", argv=argv)]
             if proposal.intent:
                 match.intent_name = match.intent_name or proposal.intent.name
                 match.intent_confidence = match.intent_confidence or proposal.intent.confidence
@@ -230,45 +257,58 @@ class Pipeline:
                 match.provider_name = proposal.provider.name
             reason = proposal.reason
 
-        verdict = evaluate(argv, confirmed=confirmed, policy=self.security_policy)
-        if verdict.decision is Decision.DENY:
-            self.bus.emit(events.EXECUTION_DENIED, {"argv": argv, "reason": verdict.reason})
-            return self._finish(
-                started,
-                status="denied",
-                match=match,
-                llm_used=llm_used,
-                argv=argv,
-                message=verdict.reason,
-                debug=debug,
-                text=text,
-                normalized=normalized,
-                proposal=proposal,
-                verdict=verdict,
-                cache_layer=cache_layer,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+        if not argv:
+            argv = flatten_argv(steps)
+        parameters = self._bind_parameters(match, text)
+        for step in steps:
+            preview = interpolate_command(step.argv, parameters) if step.argv else ["http"]
+            level = SecurityLevel(step.security_level) if step.security_level is not None else None
+            verdict = evaluate(
+                preview or ["http"],
+                confirmed=confirmed,
+                policy=self.security_policy,
+                level=level,
             )
-        if verdict.decision is Decision.CONFIRM:
-            return self._finish(
-                started,
-                status="confirm_required",
-                match=match,
-                llm_used=llm_used,
-                argv=argv,
-                message=verdict.reason,
-                debug=debug,
-                text=text,
-                normalized=normalized,
-                proposal=proposal,
-                verdict=verdict,
-                cache_layer=cache_layer,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
+            if verdict.decision is Decision.DENY:
+                self.bus.emit(events.EXECUTION_DENIED, {"argv": preview, "reason": verdict.reason})
+                return self._finish(
+                    started,
+                    status="denied",
+                    match=match,
+                    llm_used=llm_used,
+                    argv=argv,
+                    message=verdict.reason,
+                    debug=debug,
+                    text=text,
+                    normalized=normalized,
+                    proposal=proposal,
+                    verdict=verdict,
+                    cache_layer=cache_layer,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    steps=steps,
+                )
+            if verdict.decision is Decision.CONFIRM:
+                return self._finish(
+                    started,
+                    status="confirm_required",
+                    match=match,
+                    llm_used=llm_used,
+                    argv=argv,
+                    message=verdict.reason,
+                    debug=debug,
+                    text=text,
+                    normalized=normalized,
+                    proposal=proposal,
+                    verdict=verdict,
+                    cache_layer=cache_layer,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    steps=steps,
+                )
 
-        self.bus.emit(events.EXECUTION_STARTED, {"argv": argv})
-        outcome = self.executor.execute(ExecuteRequest(argv=argv, timeout_s=self.timeout_s))
+        self.bus.emit(events.EXECUTION_STARTED, {"argv": argv, "steps": len(steps)})
+        outcome = self._run_steps(steps, parameters)
         status = "success" if outcome.success else "failed"
         self.bus.emit(
             events.EXECUTION_COMPLETED if outcome.success else events.EXECUTION_FAILED,
@@ -290,6 +330,7 @@ class Pipeline:
             cache_layer=cache_layer,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            steps=steps,
         )
 
     def _cache_lookup(self, text: str, normalized: str) -> CachedResolution | None:
@@ -355,6 +396,43 @@ class Pipeline:
             ambiguous_entity=ambiguous,
         )
 
+    def _bind_parameters(self, match: MatchSnapshot, text: str) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "query": match.entity_name or "",
+            "entity": match.entity_name or "",
+            "intent": match.intent_name or "",
+            "text": text,
+        }
+        getter = getattr(self.knowledge, "entity_metadata", None)
+        if getter and match.entity_name:
+            meta = getter(match.entity_name) or {}
+            if isinstance(meta, dict):
+                for key, value in meta.items():
+                    if isinstance(value, (str, int, float)):
+                        params[str(key)] = value
+        return params
+
+    def _run_steps(self, steps: list[FlowStep], parameters: dict[str, Any]) -> ExecuteResult:
+        context = dict(parameters)
+        last = ExecuteResult(success=True, stdout="ok")
+        for step in steps:
+            argv = interpolate_command(step.argv, context) if step.argv else []
+            extra = interpolate_mapping(step.extra, context)
+            extra_map = extra if isinstance(extra, dict) else {}
+            if not argv:
+                is_http = (step.executor or "").lower() == "http" or extra_map.get("url")
+                argv = ["http"] if is_http else []
+            if not argv:
+                return ExecuteResult(success=False, error="empty command")
+            executor = executor_for(step.executor, fallback=self.executor)
+            last = executor.execute(
+                ExecuteRequest(argv=argv, extra=extra_map, timeout_s=self.timeout_s)
+            )
+            if not last.success:
+                return last
+            context.update(json_bindings(last.stdout))
+        return last
+
     def _finish(
         self,
         started: float,
@@ -373,6 +451,7 @@ class Pipeline:
         cache_layer: str = "",
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        steps: list[FlowStep] | None = None,
     ) -> PipelineResult:
         elapsed = int((time.perf_counter() - started) * 1000)
         actual_tokens = prompt_tokens + completion_tokens
@@ -439,6 +518,7 @@ class Pipeline:
             original_text=text,
             normalized_text=normalized,
             ambiguous_entity=match.ambiguous_entity,
+            steps=[step.to_dict() for step in steps or []],
         )
 
 

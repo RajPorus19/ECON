@@ -78,9 +78,16 @@ ECON_LLM_BASE_URL=http://127.0.0.1:11434
 ECON_LLM_MODEL=hermes
 
 econom start
+# uvicorn ASGI so SSE works: http://127.0.0.1:8000
 # Django Admin: http://127.0.0.1:8000/admin/
 # Health:       http://127.0.0.1:8000/health
 # API:          POST /api/v1/execute
+```
+
+Development settings run Celery tasks **eagerly** (inline) so confidence/aliases still update without a worker. For Redis-backed workers (production / Docker):
+
+```bash
+celery -A config worker -l info
 ```
 
 ```bash
@@ -139,7 +146,7 @@ docker compose up --build
 econom doctor
 ```
 
-Checks PostgreSQL, Redis, Ollama/Hermes (`GET /api/tags`), STT if present, the shell executor, and the host agent.
+Checks PostgreSQL, Redis, Ollama/Hermes (`GET /api/tags`), STT extras (reports **not installed** when missing — not a pass), the shell executor, and the host agent. Steam/Jellyfin env vars are mentioned only when they are set.
 
 ## Environment
 
@@ -157,7 +164,9 @@ Checks PostgreSQL, Redis, Ollama/Hermes (`GET /api/tags`), STT if present, the s
 | `ECON_HOST_AGENT_TOKEN` | (required for the agent) | Shared bearer token |
 | `ECON_API_URL` | `http://127.0.0.1:8000` | Used by `econom run` and `econom-voice` |
 | `ECON_ESTIMATED_BASELINE_TOKENS` | `1200` | Estimated Hermes cost when ECON skips the LLM |
-| `JELLYFIN_URL` / `JELLYFIN_API_KEY` | | Jellyfin plugin secrets (env only) |
+| `JELLYFIN_URL` / `JELLYFIN_API_KEY` | | Jellyfin HTTP search/play (env only; never in flows) |
+| `JELLYFIN_SESSION_ID` | | Optional session for remote play |
+| `STEAM_API_KEY` / `STEAM_ID` | | Optional Steam library lookup for `app_id` |
 
 ## Project layout
 

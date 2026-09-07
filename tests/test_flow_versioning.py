@@ -74,3 +74,43 @@ def test_persist_proposal_creates_versioned_flow() -> None:
     assert again.version == 2
     assert again.pk != flow.pk
     assert Entity.objects.filter(normalized_name=normalize("Firefox")).exists()
+
+
+@pytest.mark.django_db
+def test_patch_nodes_creates_new_version(client) -> None:
+    intent = Intent.objects.create(name="launch_program")
+    flow = Flow.objects.create(name="launch firefox", intent=intent, version=1, confidence=0.8)
+    action = Action.objects.create(name="shell.execute", type="shell", executor="shell")
+    node = FlowNode.objects.create(
+        flow=flow,
+        node_key="execute",
+        node_type="action",
+        action=action,
+        position=0,
+        config={"argv": ["echo", "v1"]},
+    )
+    response = client.patch(
+        f"/api/v1/flows/{flow.pk}",
+        data={
+            "name": "launch firefox",
+            "nodes": [
+                {
+                    "id": node.pk,
+                    "node_key": "execute",
+                    "node_type": "action",
+                    "position": 0,
+                    "x": 12,
+                    "y": 40,
+                    "config": {"argv": ["echo", "v1"]},
+                }
+            ],
+            "edges": [],
+        },
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] != flow.pk
+    assert body["version"] == 2
+    flow.refresh_from_db()
+    assert flow.enabled is False

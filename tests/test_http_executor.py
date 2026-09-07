@@ -1,7 +1,7 @@
 import httpx
 
 from core.execution import ExecuteRequest
-from core.execution.http import HttpExecutor, interpolate_command
+from core.execution.http import HttpExecutor, interpolate_command, json_bindings
 
 
 def test_interpolate_steam_command() -> None:
@@ -22,3 +22,8 @@ def test_http_executor_uses_mock_transport() -> None:
     )
     assert result.success
     assert result.stdout == "ok"
+
+
+def test_json_bindings_item_id() -> None:
+    found = json_bindings('{"Items": [{"Id": "abc", "Name": "Rick"}]}')
+    assert found["item_id"] == "abc"

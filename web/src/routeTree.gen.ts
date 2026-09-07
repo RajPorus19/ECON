@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as FlowsRouteImport } from './routes/flows'
 import { Route as GraphRouteImport } from './routes/graph'
 import { Route as HermesRouteImport } from './routes/hermes'
 import { Route as KnowledgeRouteImport } from './routes/knowledge'
@@ -20,6 +21,11 @@ import { Route as FlowsFlowIdRouteImport } from './routes/flows.$flowId'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FlowsRoute = FlowsRouteImport.update({
+  id: '/flows',
+  path: '/flows',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GraphRoute = GraphRouteImport.update({
@@ -48,13 +54,14 @@ const RequestsRoute = RequestsRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const FlowsFlowIdRoute = FlowsFlowIdRouteImport.update({
-  id: '/flows/$flowId',
-  path: '/flows/$flowId',
-  getParentRoute: () => rootRouteImport,
+  id: '/$flowId',
+  path: '/$flowId',
+  getParentRoute: () => FlowsRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/flows': typeof FlowsRouteWithChildren
   '/graph': typeof GraphRoute
   '/hermes': typeof HermesRoute
   '/knowledge': typeof KnowledgeRoute
@@ -64,6 +71,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/flows': typeof FlowsRouteWithChildren
   '/graph': typeof GraphRoute
   '/hermes': typeof HermesRoute
   '/knowledge': typeof KnowledgeRoute
@@ -74,6 +82,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/flows': typeof FlowsRouteWithChildren
   '/graph': typeof GraphRoute
   '/hermes': typeof HermesRoute
   '/knowledge': typeof KnowledgeRoute
@@ -85,6 +94,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/flows'
     | '/graph'
     | '/hermes'
     | '/knowledge'
@@ -94,6 +104,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/flows'
     | '/graph'
     | '/hermes'
     | '/knowledge'
@@ -103,6 +114,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/flows'
     | '/graph'
     | '/hermes'
     | '/knowledge'
@@ -113,12 +125,12 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  FlowsRoute: typeof FlowsRouteWithChildren
   GraphRoute: typeof GraphRoute
   HermesRoute: typeof HermesRoute
   KnowledgeRoute: typeof KnowledgeRoute
   OptimizationsRoute: typeof OptimizationsRoute
   RequestsRoute: typeof RequestsRoute
-  FlowsFlowIdRoute: typeof FlowsFlowIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -128,6 +140,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/flows': {
+      id: '/flows'
+      path: '/flows'
+      fullPath: '/flows'
+      preLoaderRoute: typeof FlowsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/graph': {
@@ -167,22 +186,32 @@ declare module '@tanstack/react-router' {
     }
     '/flows/$flowId': {
       id: '/flows/$flowId'
-      path: '/flows/$flowId'
+      path: '/$flowId'
       fullPath: '/flows/$flowId'
       preLoaderRoute: typeof FlowsFlowIdRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof FlowsRoute
     }
   }
 }
 
+interface FlowsRouteChildren {
+  FlowsFlowIdRoute: typeof FlowsFlowIdRoute
+}
+
+const FlowsRouteChildren: FlowsRouteChildren = {
+  FlowsFlowIdRoute: FlowsFlowIdRoute,
+}
+
+const FlowsRouteWithChildren = FlowsRoute._addFileChildren(FlowsRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  FlowsRoute: FlowsRouteWithChildren,
   GraphRoute: GraphRoute,
   HermesRoute: HermesRoute,
   KnowledgeRoute: KnowledgeRoute,
   OptimizationsRoute: OptimizationsRoute,
   RequestsRoute: RequestsRoute,
-  FlowsFlowIdRoute: FlowsFlowIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

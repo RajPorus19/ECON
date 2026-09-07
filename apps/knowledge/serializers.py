@@ -153,9 +153,12 @@ class FlowSerializer(serializers.ModelSerializer):
 
 
 class FlowWriteSerializer(serializers.ModelSerializer):
+    nodes = serializers.ListField(child=serializers.DictField(), required=False)
+    edges = serializers.ListField(child=serializers.DictField(), required=False)
+
     class Meta:
         model = Flow
-        fields = ("name", "description", "enabled")
+        fields = ("name", "description", "enabled", "nodes", "edges")
 
 
 class RequestLogSerializer(serializers.ModelSerializer):

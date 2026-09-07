@@ -28,10 +28,16 @@ def _setup_django() -> None:
 
 def cmd_start(_args: argparse.Namespace) -> int:
     _load_env()
-    from django.core.management import execute_from_command_line
+    import uvicorn
 
     bind = os.environ.get("ECON_BIND", "127.0.0.1:8000")
-    execute_from_command_line(["manage.py", "runserver", bind])
+    host, _, port = bind.rpartition(":")
+    uvicorn.run(
+        "config.asgi:application",
+        host=host or "127.0.0.1",
+        port=int(port or "8000"),
+        reload=os.environ.get("ECON_RELOAD", "1") not in {"0", "false", "False"},
+    )
     return 0
 
 
@@ -104,14 +110,13 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         f"{settings.ECON['LLM_BASE_URL']} model={settings.ECON['LLM_MODEL']}",
     )
 
-    from core.stt import load_stt
+    from core.stt import UnavailableSTT, load_stt
 
     stt = load_stt()
-    stt_ok = stt.ping()
-    if stt_ok:
-        _check("STT", True, type(stt).__name__)
+    if isinstance(stt, UnavailableSTT) or not stt.ping():
+        _check("STT", False, "not installed")
     else:
-        _check("STT", True, "not installed (optional)")
+        _check("STT", True, type(stt).__name__)
 
     from core.execution import ping_shell_executor
 
@@ -134,6 +139,17 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         _check("Host agent", agent_ok, str(settings.ECON["HOST_AGENT_URL"]))
     else:
         _check("Host agent", True, f"optional ({'up' if agent_ok else 'down'})")
+
+    jellyfin_url = os.environ.get("JELLYFIN_URL", "").strip()
+    if jellyfin_url:
+        jelly_ok = bool(os.environ.get("JELLYFIN_API_KEY", "").strip())
+        if not jelly_ok:
+            failed += 1
+        key_note = "present" if jelly_ok else "missing"
+        _check("Jellyfin", jelly_ok, f"JELLYFIN_URL set; API key {key_note}")
+    steam_key = os.environ.get("STEAM_API_KEY", "").strip()
+    if steam_key:
+        _check("Steam API", True, "STEAM_API_KEY set (library lookup enabled)")
 
     print()
     if failed:

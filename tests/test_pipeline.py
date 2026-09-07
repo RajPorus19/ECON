@@ -1,3 +1,5 @@
+import httpx
+
 from core.cache import CachedResolution, MemoryPhraseCache
 from core.engine import Pipeline
 from core.execution import ExecuteRequest, ExecuteResult
@@ -92,3 +94,54 @@ def test_below_threshold_falls_back_to_llm() -> None:
     result = pipeline.run("Lance Firefox")
     assert result.llm_used is True
     assert executor.calls == [["echo", "compiled"]]
+
+
+def test_l3_cache_hit_after_intent_entity_match() -> None:
+    cache = MemoryPhraseCache()
+    cache.put_intent_entity(
+        "launch_program",
+        "Firefox",
+        CachedResolution(flow_id="3", argv=["echo", "l3"], flow_confidence=1.0),
+    )
+    executor = RecordingExecutor()
+    pipeline = Pipeline(knowledge=EmptyKnowledge(), executor=executor, llm=FakeLLM(), cache=cache)
+    result = pipeline.run("Lance Firefox")
+    assert result.llm_used is False
+    assert result.cache_layer == "L3"
+    assert executor.calls == [["echo", "l3"]]
+
+
+def test_http_step_walk(monkeypatch) -> None:
+    class HttpKnowledge:
+        def intent_aliases(self):
+            return [("play", "play_media", 1.0)]
+
+        def entity_names(self):
+            return [("rick and morty", "Rick and Morty", 1.0)]
+
+        def find_flow(self, intent_name: str, entity_name: str | None):
+            return (
+                "9",
+                0.99,
+                [
+                    {
+                        "executor": "http",
+                        "argv": ["http"],
+                        "extra": {"url": "https://example.test/Items?q={query}", "method": "GET"},
+                    }
+                ],
+            )
+
+    seen: list[str] = []
+
+    def fake_request(method, url, headers=None, json=None, timeout=None):
+        seen.append(url)
+        return httpx.Response(200, json={"Items": [{"Id": "item-1"}]})
+
+    monkeypatch.setattr("core.execution.http.httpx.request", fake_request)
+    pipeline = Pipeline(knowledge=HttpKnowledge(), executor=RecordingExecutor(), llm=FakeLLM())
+    result = pipeline.run("play Rick and Morty")
+    assert result.status == "success"
+    assert result.llm_used is False
+    assert seen
+    assert "Rick" in seen[0] or "rick" in seen[0].lower()

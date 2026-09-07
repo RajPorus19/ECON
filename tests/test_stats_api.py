@@ -41,3 +41,15 @@ def test_stats_and_request_list(client) -> None:
     opt = client.get("/api/v1/optimizations")
     assert opt.status_code == 200
     assert opt.json()["intents"][0]["intent"] == "launch_program"
+
+    graph = client.get("/api/v1/graph")
+    assert graph.status_code == 200
+    nodes = graph.json()["nodes"]
+    intent_node = next(item for item in nodes if item["type"] == "intent")
+    assert "aliases" in intent_node
+    detail = client.get(f"/api/v1/graph/detail?id={intent_node['id']}")
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["name"] == "launch_program"
+    assert payload["type"] == "intent"
+    assert payload["last_execution"]["text"] == "Lance Firefox"

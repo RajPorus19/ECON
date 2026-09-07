@@ -36,13 +36,48 @@ class EnergyVAD:
         return peak >= self.threshold
 
 
+class SileroVAD:
+    """Runs a Silero-style callable on PCM16 chunks. EnergyVAD is the fallback."""
+
+    def __init__(self, model: object, threshold: float = 0.5) -> None:
+        self.model = model
+        self.threshold = threshold
+        self._fallback = EnergyVAD()
+
+    def speech_triggered(self, pcm16: bytes, sample_rate: int) -> bool:
+        samples = _pcm16_to_float(pcm16)
+        if not samples:
+            return False
+        try:
+            tensor: object = samples
+            try:
+                import torch
+
+                tensor = torch.tensor(samples)
+            except Exception:  # noqa: BLE001 — tests pass a fake model, no GPU
+                tensor = samples
+            prob = self.model(tensor, sample_rate)
+            if hasattr(prob, "item"):
+                prob = prob.item()
+            return float(prob) >= self.threshold
+        except Exception:  # noqa: BLE001
+            return self._fallback.speech_triggered(pcm16, sample_rate)
+
+
+def _pcm16_to_float(pcm16: bytes) -> list[float]:
+    if len(pcm16) < 2:
+        return []
+    return [
+        int.from_bytes(pcm16[i : i + 2], "little", signed=True) / 32768.0
+        for i in range(0, len(pcm16) - 1, 2)
+    ]
+
+
 def load_silero_vad() -> VADProvider:
     try:
-        import torch  # noqa: F401
         from silero_vad import load_silero_vad as _load
 
-        _load()
-        return EnergyVAD()
+        return SileroVAD(_load())
     except Exception:  # noqa: BLE001
         return EnergyVAD()
 
@@ -73,6 +108,7 @@ __all__ = [
     "EconVoiceClient",
     "EnergyVAD",
     "FasterWhisperSTT",
+    "SileroVAD",
     "VoiceConfig",
     "load_silero_vad",
 ]

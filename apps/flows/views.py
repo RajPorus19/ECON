@@ -4,7 +4,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from apps.flows.models import Action, Flow
-from apps.knowledge.learning import clone_flow_version
+from apps.knowledge.learning import apply_graph_version, clone_flow_version
 from apps.knowledge.serializers import ActionSerializer, FlowSerializer, FlowWriteSerializer
 from apps.requests.runtime import get_phrase_cache
 from apps.requests.services import build_executor
@@ -29,8 +29,18 @@ class FlowViewSet(
             return FlowWriteSerializer
         return FlowSerializer
 
-    def perform_update(self, serializer):
-        serializer.save()
+    def update(self, request, *args, **kwargs):
+        flow = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        if "nodes" in data or "edges" in data:
+            clone = apply_graph_version(flow, data)
+            get_phrase_cache().invalidate_flow(str(flow.pk))
+            get_phrase_cache().invalidate_flow(str(clone.pk))
+            return Response(FlowSerializer(clone).data)
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
 
     @action(detail=True, methods=["post"])
     def disable(self, _request, pk=None):
