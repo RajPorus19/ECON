@@ -18,6 +18,7 @@ from core.engine import Pipeline, PipelineResult
 from core.execution import FlowStep
 from core.execution.host_agent import HostAgentExecutor
 from core.execution.local import LocalSubprocessExecutor
+from core.llm.factory import build_llm_provider
 from core.llm.ollama import OllamaProvider
 from core.normalize import normalize
 from core.secrets import redact_mapping
@@ -164,9 +165,9 @@ def build_executor():
     return LocalSubprocessExecutor()
 
 
-def build_llm() -> OllamaProvider:
+def build_llm():
     cfg = settings.ECON
-    return OllamaProvider(base_url=str(cfg["LLM_BASE_URL"]), model=str(cfg["LLM_MODEL"]))
+    return build_llm_provider(cfg)
 
 
 def build_pipeline(llm: OllamaProvider | None | object = ...) -> Pipeline:

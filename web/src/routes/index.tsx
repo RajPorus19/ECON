@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { CommandConsole } from "../components/command-console";
 import { Card, CardTitle } from "../components/ui/card";
 import { API_BASE, apiGet, type Stats } from "../lib/api";
 import { formatMs, formatPct } from "../lib/utils";
@@ -47,6 +48,7 @@ function DashboardPage() {
           value={data ? formatMs(data.average_latency_ms) : "—"}
         />
       </div>
+      <CommandConsole />
       <Card>
         <CardTitle>Live execution</CardTitle>
         <ul className="mt-3 space-y-1 font-mono text-xs text-stone-600">

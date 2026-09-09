@@ -48,6 +48,9 @@ importers:
         specifier: ^4.1.12
         version: 4.5.4
     devDependencies:
+      '@tailwindcss/oxide-linux-x64-gnu':
+        specifier: 4.3.3
+        version: 4.3.3
       '@tailwindcss/vite':
         specifier: ^4.1.17
         version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.33.0))
@@ -2135,8 +2138,7 @@ snapshots:
   '@tailwindcss/oxide-linux-arm64-musl@4.3.3':
     optional: true
 
-  '@tailwindcss/oxide-linux-x64-gnu@4.3.3':
-    optional: true
+  '@tailwindcss/oxide-linux-x64-gnu@4.3.3': {}
 
   '@tailwindcss/oxide-linux-x64-musl@4.3.3':
     optional: true

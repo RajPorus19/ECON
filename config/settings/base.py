@@ -106,6 +106,7 @@ ECON = {
     "LLM_BASE_URL": _yaml.llm_base_url,
     "LLM_MODEL": _yaml.llm_model,
     "LLM_PROVIDER": _yaml.llm_provider,
+    "LLM_API_KEY": env_str("ECON_LLM_API_KEY", ""),
     "CONFIDENCE_THRESHOLD": _yaml.confidence_threshold,
     "ALIAS_CONFIRMATIONS": _yaml.alias_confirmations,
     "SEMANTIC_THRESHOLD": _yaml.semantic_threshold,

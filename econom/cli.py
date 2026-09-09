@@ -95,19 +95,16 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         failed += 1
         _check("Redis", False, str(exc))
 
-    from core.llm.ollama import OllamaProvider
+    from core.llm.factory import build_llm_provider
 
-    llm = OllamaProvider(
-        base_url=str(settings.ECON["LLM_BASE_URL"]),
-        model=str(settings.ECON["LLM_MODEL"]),
-    )
+    llm = build_llm_provider(settings.ECON)
     llm_ok = llm.ping()
     if not llm_ok:
         failed += 1
     _check(
-        "Ollama/Hermes",
+        "LLM (Hermes/Ollama)",
         llm_ok,
-        f"{settings.ECON['LLM_BASE_URL']} model={settings.ECON['LLM_MODEL']}",
+        f"{settings.ECON['LLM_BASE_URL']} model={settings.ECON['LLM_MODEL']} provider={settings.ECON.get('LLM_PROVIDER', 'ollama')}",
     )
 
     from core.stt import UnavailableSTT, load_stt

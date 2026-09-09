@@ -45,6 +45,31 @@ export type Stats = {
   tokens_saved_are_estimated: boolean;
 };
 
+export type ExecuteResult = {
+  status: string;
+  intent: string | null;
+  entity: string | null;
+  flow_id: string | null;
+  execution_time_ms: number;
+  llm_used: boolean;
+  message: string;
+  argv: string[];
+  cache_layer: string | null;
+  tokens_saved: number;
+  tokens_saved_are_estimated: boolean;
+  debug?: {
+    security?: { decision?: string; reason?: string; level?: number };
+    execution?: {
+      success: boolean;
+      exit_code: number;
+      stdout?: string;
+      stderr?: string;
+    };
+    combined_confidence?: number;
+    cache_layer?: string | null;
+  };
+};
+
 export type RequestRow = {
   id: number;
   created_at: string;
